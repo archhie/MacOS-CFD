@@ -27,6 +27,7 @@ class Gui {
     int preset = static_cast<int>(Preset::JetPlume);
     BC bc;             // boundary condition settings
     double Ly = 1.0;   // domain height for jet sliders
+    bool inflow_inactive = false;
 
     bool init(GLFWwindow *window);
     void begin_frame();

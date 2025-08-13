@@ -1,2 +1,2 @@
 #include "ui.hpp"
-// TODO: implement UI
+// UI moved to gui/; this file remains as a stub.
