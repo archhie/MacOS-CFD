@@ -236,6 +236,14 @@ void Gui::draw_simulation_viewport(int timestep, double sim_time, double dt,
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     
     if (ImGui::Begin("Simulation Viewport", nullptr, window_flags)) {
+        // Get the simulation window position and size for proper overlay positioning
+        ImVec2 sim_pos  = ImGui::GetWindowPos();
+        ImVec2 sim_size = ImGui::GetWindowSize();
+        const float margin = 10.0f;
+        
+        // Get menu bar height to avoid overlapping with the top black bar
+        float menu_bar_height = ImGui::GetFrameHeight();
+        
         // Get the content region for the simulation
         ImVec2 content_size = ImGui::GetContentRegionAvail();
         
@@ -246,38 +254,133 @@ void Gui::draw_simulation_viewport(int timestep, double sim_time, double dt,
         // Draw the simulation texture
         ImGui::Image((void*)(intptr_t)texture, content_size);
         
-        // Small floating overlay in top-left corner
-        ImGui::SetCursorPos(ImVec2(10, 10));
-        ImGui::BeginChild("SimulationOverlay", ImVec2(180, 100), true, 
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        // Helper: place a small overlay at a chosen corner within the simulation window
+        enum class OverlayCorner { TopLeft, TopRight, BottomLeft, BottomRight };
+
+        auto BeginOverlay = [&](const char* name, OverlayCorner corner, ImVec2 padding = ImVec2(8,6), float alpha = 0.9f)
+        {
+            ImVec2 pos = sim_pos;
+            switch (corner) {
+              case OverlayCorner::TopLeft:     pos = ImVec2(sim_pos.x + margin,                      sim_pos.y + margin + menu_bar_height); break;
+              case OverlayCorner::TopRight:    pos = ImVec2(sim_pos.x + sim_size.x - margin,        sim_pos.y + margin + menu_bar_height); break;
+              case OverlayCorner::BottomLeft:  pos = ImVec2(sim_pos.x + margin,                      sim_pos.y + sim_size.y - margin); break;
+              case OverlayCorner::BottomRight: pos = ImVec2(sim_pos.x + sim_size.x - margin,        sim_pos.y + sim_size.y - margin); break;
+            }
+            // We'll right/left align later after we know window size (for right/bottom corners)
+            ImGui::SetNextWindowBgAlpha(alpha);
+            ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+            ImGui::Begin(name,
+                nullptr,
+                ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoFocusOnAppearing |
+                ImGuiWindowFlags_NoNav |
+                ImGuiWindowFlags_NoMove);
+        };
+
+        auto EndOverlay = [&](OverlayCorner corner)
+        {
+            // If right/bottom corner, shift by window size to keep inside simulation window
+            ImVec2 win_size = ImGui::GetWindowSize();
+            ImVec2 pos = ImGui::GetWindowPos();
+            if (corner == OverlayCorner::TopRight)
+                ImGui::SetWindowPos(ImVec2(pos.x - win_size.x, pos.y), ImGuiCond_Always);
+            else if (corner == OverlayCorner::BottomLeft)
+                ImGui::SetWindowPos(ImVec2(pos.x, pos.y - win_size.y), ImGuiCond_Always);
+            else if (corner == OverlayCorner::BottomRight)
+                ImGui::SetWindowPos(ImVec2(pos.x - win_size.x, pos.y - win_size.y), ImGuiCond_Always);
+
+            ImGui::End();
+            ImGui::PopStyleVar();
+        };
+
+        // HUD overlay in top-left corner
+        BeginOverlay("##hud", OverlayCorner::TopLeft);
         
-        // Play/Pause button
-        if (ImGui::Button(running ? "⏸" : "▶", ImVec2(40, 25))) {
+        // Play/Pause button (using plain text instead of Unicode)
+        if (ImGui::Button(running ? "Pause" : "Play", ImVec2(40, 25))) {
             running = !running;
         }
         
         ImGui::SameLine();
         
-        // Step button
-        if (ImGui::Button("⏭", ImVec2(40, 25))) {
+        // Step button (using plain text instead of Unicode)
+        if (ImGui::Button("Step", ImVec2(40, 25))) {
             step = true;
         }
         
         ImGui::SameLine();
         
-        // Reset button
-        if (ImGui::Button("⏹", ImVec2(40, 25))) {
+        // Reset button (using plain text instead of Unicode)
+        if (ImGui::Button("Reset", ImVec2(40, 25))) {
             reset = true;
         }
         
         ImGui::Spacing();
         
-        // Tiny stats
-        ImGui::Text("%s", get_field_name(field).c_str());
-        ImGui::Text("FPS: %.0f | Step: %d", fps, timestep);
+        // Field and stats info
+        ImGui::TextUnformatted(get_field_name(field).c_str());
+        ImGui::Text("FPS: %.1f | Step: %d", fps, timestep);
         ImGui::Text("Time: %.3f", sim_time);
         
+        EndOverlay(OverlayCorner::TopLeft);
+
+        // Field statistics overlay in bottom-right corner
+        BeginOverlay("##field_stats", OverlayCorner::BottomRight);
+        ImGui::Text("Min: %.3g\nMax: %.3g\nMean: %.3g", field_min, field_max, field_mean);
+        EndOverlay(OverlayCorner::BottomRight);
+
+        // Colorbar overlay on the right side
+        BeginOverlay("##colorbar", OverlayCorner::TopRight, ImVec2(4, 8), 0.8f);
+        
+        // Simple colorbar implementation
+        ImVec2 colorbar_size(20, 200);
+        ImGui::BeginChild("##colorbar_content", colorbar_size, true);
+        
+        // Draw colorbar gradient
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        ImVec2 min_pos = ImGui::GetWindowPos();
+        ImVec2 max_pos = ImVec2(min_pos.x + colorbar_size.x, min_pos.y + colorbar_size.y);
+        
+        // Create a simple gradient from the colormap colors
+        // For now, use a simple viridis-like gradient
+        for (int i = 0; i < colorbar_size.y; i++) {
+            float t = 1.0f - (float)i / colorbar_size.y; // Invert so max is at top
+            ImVec4 color;
+            
+            // Simple viridis-like gradient
+            if (t < 0.25f) {
+                float s = t / 0.25f;
+                color = ImVec4(0.0f, 0.0f, 0.5f + 0.5f * s, 1.0f);
+            } else if (t < 0.5f) {
+                float s = (t - 0.25f) / 0.25f;
+                color = ImVec4(0.0f, s, 1.0f, 1.0f);
+            } else if (t < 0.75f) {
+                float s = (t - 0.5f) / 0.25f;
+                color = ImVec4(s, 1.0f, 1.0f - s, 1.0f);
+            } else {
+                float s = (t - 0.75f) / 0.25f;
+                color = ImVec4(1.0f, 1.0f - 0.5f * s, 0.0f, 1.0f);
+            }
+            
+            ImVec2 line_start(min_pos.x, min_pos.y + i);
+            ImVec2 line_end(min_pos.x + colorbar_size.x, min_pos.y + i);
+            draw_list->AddLine(line_start, line_end, ImGui::ColorConvertFloat4ToU32(color));
+        }
+        
+        // Add border
+        draw_list->AddRect(min_pos, max_pos, ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.5f)));
+        
+        // Add scale labels
+        ImGui::SetCursorPos(ImVec2(colorbar_size.x + 5, 0));
+        ImGui::Text("%.2g", field_max);
+        ImGui::SetCursorPos(ImVec2(colorbar_size.x + 5, colorbar_size.y - 15));
+        ImGui::Text("%.2g", field_min);
+        
         ImGui::EndChild();
+        EndOverlay(OverlayCorner::TopRight);
     }
     
     ImGui::PopStyleVar();
@@ -286,7 +389,7 @@ void Gui::draw_simulation_viewport(int timestep, double sim_time, double dt,
 
 void Gui::draw_cfd_controls_panel(int timestep, double sim_time, double dt, 
                                  double max_velocity, double div_l2, double pressure_residual) {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(360, 420), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420, 420), ImVec2(FLT_MAX, FLT_MAX));
     
     if (ImGui::Begin("CFD Controls", &show_controls, ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::BeginChild("##scroll", ImGui::GetContentRegionAvail(), true, 
@@ -294,7 +397,7 @@ void Gui::draw_cfd_controls_panel(int timestep, double sim_time, double dt,
         
         // Flow Parameters Section
         if (ImGui::CollapsingHeader("Flow Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
             
             float re_float = static_cast<float>(Re);
             if (ImGui::SliderFloat("Reynolds Number (Re)", &re_float, 10.0f, 1000.0f, "%.1f")) {
@@ -317,7 +420,7 @@ void Gui::draw_cfd_controls_panel(int timestep, double sim_time, double dt,
         
         // Timestep Control Section
         if (ImGui::CollapsingHeader("Timestep Control", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
             
             float dt_float = static_cast<float>(this->dt);
             if (ImGui::SliderFloat("dt Override", &dt_float, 0.0001f, 0.01f, "%.4f")) {
@@ -332,7 +435,7 @@ void Gui::draw_cfd_controls_panel(int timestep, double sim_time, double dt,
         
         // Simulation Speed Section
         if (ImGui::CollapsingHeader("Simulation Speed", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
             
             float speed_float = static_cast<float>(sim_speed);
             if (ImGui::SliderFloat("Speed Multiplier", &speed_float, 0.1f, 5.0f, "%.1fx")) {
@@ -438,13 +541,13 @@ void Gui::draw_visualization_panel(GLuint texture) {
         ImGui::Checkbox("Auto scale (EMA α=0.08)", &auto_scale);
         
         if (!auto_scale) {
-            ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
             ImGui::SliderFloat("Min", &color_scale_min, -10.0f, 10.0f, "%.3f");
             ImGui::SliderFloat("Max", &color_scale_max, -10.0f, 10.0f, "%.3f");
             ImGui::PopItemWidth();
         }
         
-        ImGui::PushItemWidth(-FLT_MIN);
+        ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
         ImGui::SliderFloat("Gamma", &gamma, 0.8f, 1.2f, "%.2f");
         ImGui::PopItemWidth();
         
@@ -473,7 +576,7 @@ void Gui::draw_boundary_conditions_panel() {
         
         // Preset selector
         ImGui::Text("Preset Configurations");
-        ImGui::PushItemWidth(-FLT_MIN);
+        ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
         
         const char* preset_names[] = {"Jet Plume", "Lid-Driven Cavity", "Periodic Shear"};
         if (ImGui::Combo("Preset", &preset, preset_names, 3)) {
@@ -658,7 +761,7 @@ void Gui::reset_dock_layout(ImGuiID dockspace_id) {
 
     // Split main dock into left (controls) and right (BC), keep center for simulation
     ImGuiID dock_main_id = dockspace_id;
-    ImGuiID dock_left = ImGui::DockBuilderSplitNode(dock_main_id, ImGuiDir_Left, 0.28f, nullptr, &dock_main_id);
+    ImGuiID dock_left = ImGui::DockBuilderSplitNode(dock_main_id, ImGuiDir_Left, 0.32f, nullptr, &dock_main_id);
     ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main_id, ImGuiDir_Right, 0.28f, nullptr, &dock_main_id);
 
     // Dock our windows
@@ -685,8 +788,7 @@ void Gui::load_fonts() {
         fonts.mono_font = fonts.default_font;
     }
     
-    // Build font atlas
-    io.Fonts->Build();
+    // Note: Font atlas is built automatically by the backend, no need to call Build() manually
 }
 
 void Gui::draw_field_stats() {
