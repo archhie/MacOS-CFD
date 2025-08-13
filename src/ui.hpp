@@ -1,2 +1,2 @@
 #pragma once
-// Placeholder for UI interface
+// Legacy placeholder: GUI is implemented in gui/ subdirectory.

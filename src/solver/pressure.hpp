@@ -22,9 +22,13 @@ class PressureSolver {
     double solve(Field2D<double> &p, const Field2D<double> &rhs,
                  const PressureParams &params);
 
+    double last_residual() const { return last_residual_; }
+
   private:
     const Grid &g;
     Field2D<double> r, z, s, Ap; // PCG work buffers
+    double last_residual_ = 0.0;
+    bool warned_nan_ = false;
 
     void apply_laplacian(const Field2D<double> &in,
                          Field2D<double> &out) const;

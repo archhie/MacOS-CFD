@@ -87,6 +87,21 @@ int main(int argc, char **argv) {
     state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
     state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
 
+    // deterministic initialization
+    auto clear_field = [](auto &f) {
+        size_t sz = static_cast<size_t>(f.pitch) * (f.ny + 2 * f.ngy);
+        std::memset(f.data, 0, sz * sizeof(*f.data));
+    };
+    clear_field(state.u);
+    clear_field(state.v);
+    clear_field(state.p);
+    clear_field(state.rhs);
+    clear_field(state.tmp);
+    size_t szs = static_cast<size_t>(state.scalar.pitch) *
+                 (state.scalar.ny + 2 * state.scalar.ngy);
+    std::memset(state.scalar.data, 0, szs * sizeof(float));
+    integrator.clear_work();
+
     PressureSolver pressure(grid);
     TimeIntegrator integrator(grid);
     BC bc;
@@ -166,6 +181,9 @@ int main(int argc, char **argv) {
         double divL2 = divergence_l2(grid, state.u, state.v);
         update_field_texture(grid, state, gui.field, tex, texbuf);
 
+        gui.inflow_inactive = (bc.left.type == BCType::Inflow &&
+                               (std::abs(bc.left.inflow_u) < 1e-12 ||
+                                bc.jet_width < grid.dy));
         gui.draw(step, sim_time, last_dt, max_vel, divL2, pres_res, tex);
 
         if (gui.apply_preset) {
@@ -215,16 +233,13 @@ int main(int argc, char **argv) {
         gui.end_frame(window);
 
         if (gui.reset || gui.reset_run) {
-            size_t sz;
-            sz = static_cast<size_t>(state.u.pitch) *
-                 (state.u.ny + 2 * state.u.ngy);
-            std::memset(state.u.data, 0, sz * sizeof(double));
-            sz = static_cast<size_t>(state.v.pitch) *
-                 (state.v.ny + 2 * state.v.ngy);
-            std::memset(state.v.data, 0, sz * sizeof(double));
-            sz = static_cast<size_t>(state.p.pitch) *
-                 (state.p.ny + 2 * state.p.ngy);
-            std::memset(state.p.data, 0, sz * sizeof(double));
+            clear_field(state.u);
+            clear_field(state.v);
+            clear_field(state.p);
+            clear_field(state.rhs);
+            clear_field(state.tmp);
+            std::memset(state.scalar.data, 0, szs * sizeof(float));
+            integrator.clear_work();
 
             if (static_cast<Gui::Preset>(gui.preset) == Gui::Preset::PeriodicShear) {
                 for (int j = 0; j < grid.ny; ++j) {
@@ -247,6 +262,21 @@ int main(int argc, char **argv) {
                 gui.running = true;
         }
         gui.bc = bc;
+
+        if (step % 60 == 0) {
+            double umax = 0.0, vmax = 0.0;
+            for (int j = 0; j < grid.ny; ++j)
+                for (int i = 0; i < grid.u_nx(); ++i)
+                    umax = std::max(umax, std::abs(state.u.at_raw(i + grid.ngx, j + grid.ngy)));
+            for (int j = 0; j < grid.v_ny(); ++j)
+                for (int i = 0; i < grid.nx; ++i)
+                    vmax = std::max(vmax, std::abs(state.v.at_raw(i + grid.ngx, j + grid.ngy)));
+            std::printf("dt=%g umax=%g vmax=%g divL2=%g presRes=%g inflow(U,w)=(%g,%g)\n",
+                        last_dt, umax, vmax, divL2, pres_res,
+                        bc.left.inflow_u, bc.jet_width);
+            if (!std::isfinite(divL2) || !std::isfinite(pres_res))
+                std::printf("NaN detected -> skipping projection this step\n");
+        }
     }
 
     save_vtk(grid, state, "out/final.vtk");

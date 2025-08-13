@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "../viz.hpp"
+
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
 
@@ -55,6 +57,9 @@ void Gui::draw(int timestep, double sim_time, double dt, double max_velocity,
     ImGui::Text("Max velocity: %.6f", max_velocity);
     ImGui::Text("Divergence L2: %.2e", div_l2);
     ImGui::Text("Pressure residual: %.2e", pressure_residual);
+    ImGui::Text("Inflow U=%.3f w=%.3f", bc.left.inflow_u, bc.jet_width);
+    if (inflow_inactive)
+        ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "Inflow inactive");
     
     ImGui::End();
     
@@ -208,45 +213,19 @@ void update_field_texture(const Grid &g, const State &s, Gui::Field field,
                           GLuint tex, std::vector<unsigned char> &buffer) {
     int nx = g.nx;
     int ny = g.ny;
-    std::vector<double> tmp(static_cast<size_t>(nx) * ny);
-    double vmin = 1e30, vmax = -1e30;
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            int ii = i + g.ngx;
-            int jj = j + g.ngy;
-            double val = 0.0;
-            switch (field) {
-            case Gui::Field::U:
-                val = 0.5 * (s.u.at_raw(ii, jj) + s.u.at_raw(ii + 1, jj));
-                break;
-            case Gui::Field::V:
-                val = 0.5 * (s.v.at_raw(ii, jj) + s.v.at_raw(ii, jj + 1));
-                break;
-            case Gui::Field::Speed: {
-                double uc = 0.5 * (s.u.at_raw(ii, jj) + s.u.at_raw(ii + 1, jj));
-                double vc = 0.5 * (s.v.at_raw(ii, jj) + s.v.at_raw(ii, jj + 1));
-                val = std::sqrt(uc * uc + vc * vc);
-                break;
-            }
-            case Gui::Field::Pressure:
-                val = s.p.at_raw(ii, jj);
-                break;
-            case Gui::Field::Vorticity: {
-                double dv_dx = (s.v.at_raw(ii + 1, jj) - s.v.at_raw(ii - 1, jj)) /
-                               (2.0 * g.dx);
-                double du_dy = (s.u.at_raw(ii, jj + 1) - s.u.at_raw(ii, jj - 1)) /
-                               (2.0 * g.dy);
-                val = dv_dx - du_dy;
-                break;
-            }
-            }
-            tmp[i + j * nx] = val;
-            vmin = std::min(vmin, val);
-            vmax = std::max(vmax, val);
-        }
+    std::vector<double> tmp;
+    double vmin = 0.0, vmax = 0.0;
+    ScalarField sf;
+    switch (field) {
+    case Gui::Field::U: sf = ScalarField::U; break;
+    case Gui::Field::V: sf = ScalarField::V; break;
+    case Gui::Field::Speed: sf = ScalarField::Speed; break;
+    case Gui::Field::Pressure: sf = ScalarField::Pressure; break;
+    case Gui::Field::Vorticity: sf = ScalarField::Vorticity; break;
     }
+    compute_scalar(g, s, sf, tmp, vmin, vmax);
     buffer.resize(static_cast<size_t>(nx) * ny * 3);
-    double scale = (vmax - vmin) < 1e-12 ? 1.0 : 1.0 / (vmax - vmin);
+    double scale = 1.0 / (vmax - vmin);
     for (int idx = 0; idx < nx * ny; ++idx) {
         double norm = (tmp[idx] - vmin) * scale;
         unsigned char c = static_cast<unsigned char>(std::clamp(norm, 0.0, 1.0) * 255.0);
