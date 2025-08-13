@@ -31,7 +31,7 @@ set(SOLVER_FILES
     src/solver/metrics.cpp
     src/solver/pressure.cpp
     src/solver/project.cpp
-    src/solver/stepper.cpp
+    src/solver/time_integrator.cpp
 )
 
 add_executable(cfd2d_gui
