@@ -2,12 +2,19 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <cstring>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <OpenGL/gl3.h>
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
+#include "solver/bc.hpp"
+#include "solver/grid.hpp"
+#include "solver/state.hpp"
+#include "solver/advection.hpp"
+#include "solver/diffusion.hpp"
+#include "solver/metrics.hpp"
 
 static std::string load_file(const char* path) {
     std::ifstream f(path);
@@ -65,6 +72,31 @@ int main() {
 
     GLuint prog = build_program("shaders/quad.vert", "shaders/scalar.frag");
 
+    Grid grid;
+    grid.init(512, 256, 2.0, 1.0, 1);
+    State state;
+    state.u.allocate(grid.u_nx(), grid.ny, grid.u_pitch(), grid.ngx, grid.ngy);
+    state.v.allocate(grid.nx, grid.v_ny(), grid.v_pitch(), grid.ngx, grid.ngy);
+    state.p.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.rhs.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    Field2D<double> du_dt, dv_dt;
+    du_dt.allocate(grid.u_nx(), grid.ny, grid.u_pitch(), grid.ngx, grid.ngy);
+    dv_dt.allocate(grid.nx, grid.v_ny(), grid.v_pitch(), grid.ngx, grid.ngy);
+
+    for (int j = 0; j < state.u.ny + 2 * state.u.ngy; ++j)
+        for (int i = 0; i < state.u.pitch; ++i)
+            state.u.at_raw(i, j) = 1.0;
+    for (int j = 0; j < state.v.ny + 2 * state.v.ngy; ++j)
+        for (int i = 0; i < state.v.pitch; ++i)
+            state.v.at_raw(i, j) = 0.0;
+
+    double Re = 2000.0;
+    double CFL_target = 0.5;
+    int frame = 0;
+    printf("Grid: %d x %d (dx=%g, dy=%g)\n", grid.nx, grid.ny, grid.dx, grid.dy);
+
     float verts[] = {
         -1.0f, -1.0f, 0.0f, 0.0f,
          1.0f, -1.0f, 1.0f, 0.0f,
@@ -85,6 +117,17 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, 1);
+
+        std::memset(du_dt.data, 0, sizeof(double) * du_dt.pitch * (du_dt.ny + 2 * du_dt.ngy));
+        std::memset(dv_dt.data, 0, sizeof(double) * dv_dt.pitch * (dv_dt.ny + 2 * dv_dt.ngy));
+        advect_u(grid, state.u, state.v, du_dt);
+        diffuse_u(grid, state.u, du_dt, 1.0 / Re);
+        advect_v(grid, state.u, state.v, dv_dt);
+        diffuse_v(grid, state.v, dv_dt, 1.0 / Re);
+        if ((frame++ % 60) == 0) {
+            double dt = compute_cfl(grid, state.u, state.v, Re, CFL_target);
+            printf("CFL dt: %g\n", dt);
+        }
 
         glfwPollEvents();
 

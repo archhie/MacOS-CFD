@@ -21,11 +21,22 @@ target_include_directories(imgui PUBLIC
 
 file(GLOB SRC_FILES
     src/*.cpp
-    src/solver/*.cpp
+)
+
+set(SOLVER_FILES
+    src/solver/grid.cpp
+    src/solver/bc.cpp
+    src/solver/advection.cpp
+    src/solver/diffusion.cpp
+    src/solver/metrics.cpp
+    src/solver/pressure.cpp
+    src/solver/project.cpp
+    src/solver/stepper.cpp
 )
 
 add_executable(cfd2d_gui
     ${SRC_FILES}
+    ${SOLVER_FILES}
 )
 
 target_include_directories(cfd2d_gui PUBLIC
