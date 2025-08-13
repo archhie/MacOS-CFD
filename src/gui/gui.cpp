@@ -26,6 +26,8 @@ void Gui::draw(int timestep, double sim_time, double dt_used,
                double max_velocity, double div_l2,
                double pressure_residual, GLuint texture) {
     ImGui::Begin("CFD Controls");
+    if (ImGui::BeginTabBar("Tabs")) {
+        if (ImGui::BeginTabItem("Controls")) {
 
     // Convert doubles to floats for ImGui sliders
     float re_float = static_cast<float>(Re);
@@ -142,7 +144,7 @@ void Gui::draw(int timestep, double sim_time, double dt_used,
     }
 
     ImGui::Separator();
-    const char *items[] = {"u", "v", "speed", "p"};
+    const char *items[] = {"u", "v", "speed", "p", "vort"};
     int idx = static_cast<int>(field);
     if (ImGui::Combo("Field", &idx, items, IM_ARRAYSIZE(items)))
         field = static_cast<Field>(idx);
@@ -150,6 +152,55 @@ void Gui::draw(int timestep, double sim_time, double dt_used,
     ImVec2 size(512, 256);
     ImGui::Image(reinterpret_cast<void *>(static_cast<intptr_t>(texture)), size,
                  ImVec2(0, 1), ImVec2(1, 0));
+    ImGui::EndTabItem();
+
+        if (ImGui::BeginTabItem("Simulations")) {
+            const char *preset_items[] = {"Jet Plume", "Lid-Driven Cavity", "Periodic Shear"};
+            ImGui::Combo("Preset", &preset, preset_items, IM_ARRAYSIZE(preset_items));
+            if (ImGui::Button("Apply Preset")) apply_preset = true;
+            ImGui::SameLine();
+            if (ImGui::Button("Reset & Run")) { apply_preset = true; reset_run = true; }
+
+            if (preset == static_cast<int>(Preset::JetPlume)) {
+                float uin = static_cast<float>(bc.left.inflow_u);
+                float y0 = static_cast<float>(bc.jet_center);
+                float w = static_cast<float>(bc.jet_width);
+                float delta = static_cast<float>(bc.jet_thickness);
+                float eps = static_cast<float>(bc.jet_eps);
+                int k = bc.jet_k;
+                ImGui::SliderFloat("U_in", &uin, 0.0f, 5.0f);
+                ImGui::SliderFloat("y0", &y0, 0.0f, static_cast<float>(Ly));
+                ImGui::SliderFloat("w", &w, 0.0f, static_cast<float>(Ly));
+                ImGui::SliderFloat("delta", &delta, 0.005f * static_cast<float>(Ly), 0.05f * static_cast<float>(Ly));
+                ImGui::SliderFloat("epsilon", &eps, 0.0f, 0.1f);
+                ImGui::SliderInt("k", &k, 1, 16);
+                bc.left.inflow_u = uin;
+                bc.jet_center = y0;
+                bc.jet_width = w;
+                bc.jet_thickness = delta;
+                bc.jet_eps = eps;
+                bc.jet_k = k;
+                float profile[64];
+                for (int i = 0; i < 64; ++i) {
+                    double y = (i + 0.5) / 64.0 * Ly;
+                    profile[i] = static_cast<float>(bc.left.inflow_u *
+                        0.5 * (std::tanh((y - (bc.jet_center - 0.5 * bc.jet_width)) / bc.jet_thickness) -
+                               std::tanh((y - (bc.jet_center + 0.5 * bc.jet_width)) / bc.jet_thickness)));
+                }
+                ImGui::PlotLines("u_in(y)", profile, 64, 0, nullptr, -5.0f, 5.0f, ImVec2(0, 50));
+            } else if (preset == static_cast<int>(Preset::LidDrivenCavity)) {
+                float lid = static_cast<float>(bc.top.moving);
+                ImGui::SliderFloat("Lid speed", &lid, -5.0f, 5.0f);
+                bc.top.moving = lid;
+            } else if (preset == static_cast<int>(Preset::PeriodicShear)) {
+                float u0 = static_cast<float>(bc.left.inflow_u);
+                ImGui::SliderFloat("U0", &u0, -5.0f, 5.0f);
+                bc.left.inflow_u = u0;
+            }
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
     ImGui::End();
 }
 
@@ -192,6 +243,14 @@ void update_field_texture(const Grid &g, const State &s, Gui::Field field,
             case Gui::Field::Pressure:
                 val = s.p.at_raw(ii, jj);
                 break;
+            case Gui::Field::Vorticity: {
+                double dv_dx = (s.v.at_raw(ii + 1, jj) - s.v.at_raw(ii - 1, jj)) /
+                               (2.0 * g.dx);
+                double du_dy = (s.u.at_raw(ii, jj + 1) - s.u.at_raw(ii, jj - 1)) /
+                               (2.0 * g.dy);
+                val = dv_dx - du_dy;
+                break;
+            }
             }
             tmp[i + j * nx] = val;
             vmin = std::min(vmin, val);

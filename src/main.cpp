@@ -4,6 +4,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <cmath>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -167,15 +168,53 @@ int main(int argc, char **argv) {
 
         gui.draw(step, sim_time, last_dt, max_vel, divL2, pres_res, tex);
 
+        if (gui.apply_preset) {
+            switch (static_cast<Gui::Preset>(gui.preset)) {
+            case Gui::Preset::JetPlume:
+                bc.left.type = BCType::Inflow;
+                bc.right.type = BCType::Outflow;
+                bc.top.type = BCType::Wall;
+                bc.bottom.type = BCType::Wall;
+                gui.Re = 3000.0;
+                gui.CFL = 0.5;
+                bc.left.inflow_u = 1.0;
+                bc.left.inflow_v = 0.0;
+                bc.jet_center = 0.5 * grid.Ly;
+                bc.jet_width = 0.18 * grid.Ly;
+                bc.jet_thickness = 0.02 * grid.Ly;
+                bc.jet_eps = 0.03;
+                bc.jet_k = 8;
+                break;
+            case Gui::Preset::LidDrivenCavity:
+                bc.left.type = BCType::Wall;
+                bc.right.type = BCType::Wall;
+                bc.bottom.type = BCType::Wall;
+                bc.top.type = BCType::Moving;
+                bc.top.moving = 1.0;
+                gui.Re = 1000.0;
+                gui.CFL = 0.5;
+                break;
+            case Gui::Preset::PeriodicShear:
+                bc.left.type = BCType::Periodic;
+                bc.right.type = BCType::Periodic;
+                bc.bottom.type = BCType::Wall;
+                bc.top.type = BCType::Wall;
+                gui.Re = 1000.0;
+                gui.CFL = 0.5;
+                break;
+            }
+            gui.apply_preset = false;
+        }
+
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
         glViewport(0, 0, w, h);
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClearColor(0.02f, 0.05f, 0.15f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         gui.end_frame(window);
 
-        if (gui.reset) {
+        if (gui.reset || gui.reset_run) {
             size_t sz;
             sz = static_cast<size_t>(state.u.pitch) *
                  (state.u.ny + 2 * state.u.ngy);
@@ -186,9 +225,26 @@ int main(int argc, char **argv) {
             sz = static_cast<size_t>(state.p.pitch) *
                  (state.p.ny + 2 * state.p.ngy);
             std::memset(state.p.data, 0, sz * sizeof(double));
+
+            if (static_cast<Gui::Preset>(gui.preset) == Gui::Preset::PeriodicShear) {
+                for (int j = 0; j < grid.ny; ++j) {
+                    double y = (j + 0.5) * grid.dy;
+                    double val = bc.left.inflow_u * std::sin(2.0 * 3.141592653589793 * y / grid.Ly);
+                    for (int i = 0; i < grid.u_nx(); ++i) {
+                        int ii = i + grid.ngx;
+                        int jj = j + grid.ngy;
+                        state.u.at_raw(ii, jj) = val;
+                    }
+                }
+            }
+
             sim_time = 0.0;
             step = 0;
+            bool run_flag = gui.reset_run;
             gui.reset = false;
+            gui.reset_run = false;
+            if (run_flag)
+                gui.running = true;
         }
         gui.bc = bc;
     }
