@@ -17,8 +17,9 @@ struct TimeIntegrator {
 
     explicit TimeIntegrator(const Grid &grid);
 
-    // Advance one step. Returns chosen dt.
+    // Advance one step. Returns chosen dt. pressure_residual is output.
     double step(State &s, const BC &bc, double Re, double CFL,
-                PressureSolver &pressure, const PressureParams &pp);
+                PressureSolver &pressure, const PressureParams &pp,
+                double &pressure_residual, double dt_override = 0.0);
 };
 

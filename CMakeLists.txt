@@ -21,6 +21,7 @@ target_include_directories(imgui PUBLIC
 
 file(GLOB SRC_FILES
     src/*.cpp
+    src/gui/*.cpp
 )
 
 set(SOLVER_FILES

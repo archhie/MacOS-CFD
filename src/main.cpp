@@ -1,92 +1,61 @@
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <string>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <OpenGL/gl3.h>
-#include "imgui.h"
-#include "backends/imgui_impl_glfw.h"
-#include "backends/imgui_impl_opengl3.h"
+
+#include "gui/gui.hpp"
 #include "solver/bc.hpp"
 #include "solver/grid.hpp"
+#include "solver/metrics.hpp"
+#include "solver/pressure.hpp"
 #include "solver/state.hpp"
 #include "solver/time_integrator.hpp"
-#include "solver/pressure.hpp"
 
-static std::string load_file(const char* path) {
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        return {};
+static void save_vtk(const Grid &g, const State &s, const std::string &path) {
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    std::ofstream out(path);
+    out << "# vtk DataFile Version 3.0\nCFD2D snapshot\nASCII\n";
+    out << "DATASET STRUCTURED_POINTS\n";
+    out << "DIMENSIONS " << g.nx << " " << g.ny << " 1\n";
+    out << "ORIGIN 0 0 0\n";
+    out << "SPACING " << g.dx << " " << g.dy << " 1\n";
+    out << "POINT_DATA " << g.nx * g.ny << "\n";
+    out << "SCALARS pressure double\nLOOKUP_TABLE default\n";
+    for (int j = 0; j < g.ny; ++j) {
+        for (int i = 0; i < g.nx; ++i) {
+            int ii = i + g.ngx;
+            int jj = j + g.ngy;
+            out << s.p.at_raw(ii, jj) << "\n";
+        }
     }
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-static GLuint compile_shader(GLenum type, const char* src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    return s;
-}
-
-static GLuint build_program(const char* vpath, const char* fpath) {
-    std::string vsrc = load_file(vpath);
-    std::string fsrc = load_file(fpath);
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, vsrc.c_str());
-    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, fsrc.c_str());
-    GLuint prog = glCreateProgram();
-    glAttachShader(prog, vs);
-    glAttachShader(prog, fs);
-    glLinkProgram(prog);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    return prog;
-}
-
-int main(int argc, char** argv) {
-    if (!glfwInit()) return 1;
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "CFD2D", nullptr, nullptr);
-    if (!window) {
-        glfwTerminate();
-        return 1;
+    out << "VECTORS velocity double\n";
+    for (int j = 0; j < g.ny; ++j) {
+        for (int i = 0; i < g.nx; ++i) {
+            int ii = i + g.ngx;
+            int jj = j + g.ngy;
+            double uc = 0.5 * (s.u.at_raw(ii, jj) + s.u.at_raw(ii + 1, jj));
+            double vc = 0.5 * (s.v.at_raw(ii, jj) + s.v.at_raw(ii, jj + 1));
+            out << uc << ' ' << vc << " 0\n";
+        }
     }
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
+}
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    (void)io;
-    ImGui::StyleColorsDark();
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 330");
-
-    GLuint prog = build_program("shaders/quad.vert", "shaders/scalar.frag");
-
-    Grid grid;
-    grid.init(512, 256, 2.0, 1.0, 1);
-    State state;
-    state.u.allocate(grid.u_nx(), grid.ny, grid.u_pitch(), grid.ngx, grid.ngy);
-    state.v.allocate(grid.nx, grid.v_ny(), grid.v_pitch(), grid.ngx, grid.ngy);
-    state.p.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
-    state.rhs.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
-    state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
-    state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
-
+int main(int argc, char **argv) {
+    bool no_gui = false;
     double Re = 1000.0;
     double CFL_target = 0.5;
     PressureParams pp;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg.rfind("--Re=", 0) == 0) {
+        if (arg == "--no-gui") {
+            no_gui = true;
+        } else if (arg.rfind("--Re=", 0) == 0) {
             Re = std::stod(arg.substr(5));
         } else if (arg.rfind("--CFL=", 0) == 0) {
             CFL_target = std::stod(arg.substr(6));
@@ -107,54 +76,83 @@ int main(int argc, char** argv) {
         }
     }
 
+    Grid grid;
+    grid.init(512, 256, 2.0, 1.0, 1);
+    State state;
+    state.u.allocate(grid.u_nx(), grid.ny, grid.u_pitch(), grid.ngx, grid.ngy);
+    state.v.allocate(grid.nx, grid.v_ny(), grid.v_pitch(), grid.ngx, grid.ngy);
+    state.p.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.rhs.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+
     PressureSolver pressure(grid);
     TimeIntegrator integrator(grid);
     BC bc;
     bc.top = BCType::Moving;
     bc.movingU = 1.0;
 
-    printf("Grid: %d x %d (dx=%g, dy=%g)\n", grid.nx, grid.ny, grid.dx, grid.dy);
+    if (no_gui) {
+        double sim_time = 0.0;
+        double pres_res = 0.0;
+        for (int step = 0; step < 100; ++step) {
+            double dt = integrator.step(state, bc, Re, CFL_target, pressure, pp,
+                                        pres_res);
+            sim_time += dt;
+            if (step % 10 == 0) {
+                std::printf("step %d time %g res %g\n", step, sim_time, pres_res);
+            }
+        }
+        save_vtk(grid, state, "out/final.vtk");
+        return 0;
+    }
 
-    float verts[] = {
-        -1.0f, -1.0f, 0.0f, 0.0f,
-         1.0f, -1.0f, 1.0f, 0.0f,
-        -1.0f,  1.0f, 0.0f, 1.0f,
-         1.0f,  1.0f, 1.0f, 1.0f,
-    };
-    GLuint vao, vbo;
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    glEnableVertexAttribArray(1);
+    if (!glfwInit())
+        return 1;
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
-    int frame = 0;
+    GLFWwindow *window =
+        glfwCreateWindow(1280, 720, "CFD2D", nullptr, nullptr);
+    if (!window) {
+        glfwTerminate();
+        return 1;
+    }
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    Gui gui;
+    gui.init(window);
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    std::vector<unsigned char> texbuf;
+
+    int step = 0;
     double sim_time = 0.0;
+    double pres_res = 0.0;
 
     while (!glfwWindowShouldClose(window)) {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, 1);
 
-        double dt = integrator.step(state, bc, Re, CFL_target, pressure, pp);
-        sim_time += dt;
-        if ((frame++ % 60) == 0) {
-            printf("dt: %g time: %g\n", dt, sim_time);
+        glfwPollEvents();
+        gui.begin_frame();
+
+        if (gui.running || gui.step) {
+            double dt = integrator.step(state, bc, gui.Re, gui.CFL, pressure, pp,
+                                        pres_res, gui.dt);
+            sim_time += dt;
+            step++;
+            gui.step = false;
         }
 
-        glfwPollEvents();
+        double max_vel = max_velocity(grid, state.u, state.v);
+        update_field_texture(grid, state, gui.field, tex, texbuf);
 
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-        ImGui::Begin("Stats");
-        ImGui::Text("FPS: %.1f", io.Framerate);
-        ImGui::Text("Time: %.3f", sim_time);
-        ImGui::End();
-        ImGui::Render();
+        gui.draw(step, sim_time, max_vel, pres_res, tex);
 
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
@@ -162,21 +160,28 @@ int main(int argc, char** argv) {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        glUseProgram(prog);
-        glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        gui.end_frame(window);
 
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        glfwSwapBuffers(window);
+        if (gui.reset) {
+            size_t sz;
+            sz = static_cast<size_t>(state.u.pitch) *
+                 (state.u.ny + 2 * state.u.ngy);
+            std::memset(state.u.data, 0, sz * sizeof(double));
+            sz = static_cast<size_t>(state.v.pitch) *
+                 (state.v.ny + 2 * state.v.ngy);
+            std::memset(state.v.data, 0, sz * sizeof(double));
+            sz = static_cast<size_t>(state.p.pitch) *
+                 (state.p.ny + 2 * state.p.ngy);
+            std::memset(state.p.data, 0, sz * sizeof(double));
+            sim_time = 0.0;
+            step = 0;
+            gui.reset = false;
+        }
     }
 
-    glDeleteBuffers(1, &vbo);
-    glDeleteVertexArrays(1, &vao);
-    glDeleteProgram(prog);
-
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+    save_vtk(grid, state, "out/final.vtk");
+    glDeleteTextures(1, &tex);
+    gui.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

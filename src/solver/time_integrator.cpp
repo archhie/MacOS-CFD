@@ -11,8 +11,10 @@ TimeIntegrator::TimeIntegrator(const Grid &grid) : g(grid) {
 }
 
 double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
-                            PressureSolver &pressure, const PressureParams &pp) {
-    double dt = compute_cfl(g, s.u, s.v, Re, CFL);
+                            PressureSolver &pressure, const PressureParams &pp,
+                            double &pressure_residual, double dt_override) {
+    double dt = dt_override > 0.0 ? dt_override
+                                  : compute_cfl(g, s.u, s.v, Re, CFL);
 
     size_t sz_u = static_cast<size_t>(du_dt.pitch) * (du_dt.ny + 2 * du_dt.ngy);
     size_t sz_v = static_cast<size_t>(dv_dt.pitch) * (dv_dt.ny + 2 * dv_dt.ngy);
@@ -90,7 +92,7 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
         }
     }
 
-    pressure.solve(s.p, s.rhs, pp);
+    pressure_residual = pressure.solve(s.p, s.rhs, pp);
     apply_bc_p(g, s.p, bc);
     subtract_grad_p(g, s.u, s.v, s.p, dt);
     apply_bc_u(g, s.u, bc);
