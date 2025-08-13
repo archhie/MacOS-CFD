@@ -8,6 +8,9 @@
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
+#include "solver/bc.hpp"
+#include "solver/grid.hpp"
+#include "solver/state.hpp"
 
 static std::string load_file(const char* path) {
     std::ifstream f(path);
@@ -64,6 +67,17 @@ int main() {
     ImGui_ImplOpenGL3_Init("#version 330");
 
     GLuint prog = build_program("shaders/quad.vert", "shaders/scalar.frag");
+
+    Grid grid;
+    grid.init(512, 256, 2.0, 1.0, 1);
+    State state;
+    state.u.allocate(grid.u_nx(), grid.ny, grid.u_pitch(), grid.ngx, grid.ngy);
+    state.v.allocate(grid.nx, grid.v_ny(), grid.v_pitch(), grid.ngx, grid.ngy);
+    state.p.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.rhs.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+    printf("Grid: %d x %d (dx=%g, dy=%g)\n", grid.nx, grid.ny, grid.dx, grid.dy);
 
     float verts[] = {
         -1.0f, -1.0f, 0.0f, 0.0f,
