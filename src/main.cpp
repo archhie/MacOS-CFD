@@ -12,6 +12,8 @@
 #include "solver/bc.hpp"
 #include "solver/grid.hpp"
 #include "solver/state.hpp"
+#include "solver/time_integrator.hpp"
+#include "solver/pressure.hpp"
 
 static std::string load_file(const char* path) {
     std::ifstream f(path);
@@ -44,7 +46,7 @@ static GLuint build_program(const char* vpath, const char* fpath) {
     return prog;
 }
 
-int main() {
+int main(int argc, char** argv) {
     if (!glfwInit()) return 1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -79,6 +81,38 @@ int main() {
     state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
     state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
 
+    double Re = 1000.0;
+    double CFL_target = 0.5;
+    PressureParams pp;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg.rfind("--Re=", 0) == 0) {
+            Re = std::stod(arg.substr(5));
+        } else if (arg.rfind("--CFL=", 0) == 0) {
+            CFL_target = std::stod(arg.substr(6));
+        } else if (arg.rfind("--solver=", 0) == 0) {
+            std::string val = arg.substr(9);
+            if (val == "pcg")
+                pp.type = PressureSolverType::PCG;
+            else
+                pp.type = PressureSolverType::Multigrid;
+        } else if (arg.rfind("--mg-levels=", 0) == 0) {
+            pp.mg_levels = std::stoi(arg.substr(12));
+        } else if (arg.rfind("--vcycles=", 0) == 0) {
+            pp.vcycles = std::stoi(arg.substr(10));
+        } else if (arg.rfind("--tol=", 0) == 0) {
+            pp.tol = std::stod(arg.substr(6));
+        } else if (arg.rfind("--pcg-iters=", 0) == 0) {
+            pp.pcg_max_iters = std::stoi(arg.substr(12));
+        }
+    }
+
+    PressureSolver pressure(grid);
+    TimeIntegrator integrator(grid);
+    BC bc;
+    bc.top = BCType::Moving;
+    bc.movingU = 1.0;
+
     printf("Grid: %d x %d (dx=%g, dy=%g)\n", grid.nx, grid.ny, grid.dx, grid.dy);
 
     float verts[] = {
@@ -98,19 +132,17 @@ int main() {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
+    int frame = 0;
+    double sim_time = 0.0;
+
     while (!glfwWindowShouldClose(window)) {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, 1);
 
-        std::memset(du_dt.data, 0, sizeof(double) * du_dt.pitch * (du_dt.ny + 2 * du_dt.ngy));
-        std::memset(dv_dt.data, 0, sizeof(double) * dv_dt.pitch * (dv_dt.ny + 2 * dv_dt.ngy));
-        advect_u(grid, state.u, state.v, du_dt);
-        diffuse_u(grid, state.u, du_dt, 1.0 / Re);
-        advect_v(grid, state.u, state.v, dv_dt);
-        diffuse_v(grid, state.v, dv_dt, 1.0 / Re);
+        double dt = integrator.step(state, bc, Re, CFL_target, pressure, pp);
+        sim_time += dt;
         if ((frame++ % 60) == 0) {
-            double dt = compute_cfl(grid, state.u, state.v, Re, CFL_target);
-            printf("CFL dt: %g\n", dt);
+            printf("dt: %g time: %g\n", dt, sim_time);
         }
 
         glfwPollEvents();
@@ -120,6 +152,7 @@ int main() {
         ImGui::NewFrame();
         ImGui::Begin("Stats");
         ImGui::Text("FPS: %.1f", io.Framerate);
+        ImGui::Text("Time: %.3f", sim_time);
         ImGui::End();
         ImGui::Render();
 
