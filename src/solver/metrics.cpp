@@ -23,14 +23,30 @@ double compute_cfl(const Grid& g, const Field2D<double>& u, const Field2D<double
         }
     }
 
-    double dt_adv = 1e30;
-    if (umax > 1e-12)
-        dt_adv = std::min(dt_adv, g.dx / umax);
-    if (vmax > 1e-12)
-        dt_adv = std::min(dt_adv, g.dy / vmax);
     double dt_diff = 0.5 * Re * std::min(g.dx * g.dx, g.dy * g.dy);
-    double dt = std::min(dt_adv, dt_diff);
-    return CFL_target * dt;
+    double dt_adv = 1e30;
+    
+    // Only use advective limit if velocities are non-zero and reasonable
+    if (umax > 1e-12 && umax < 1e6)
+        dt_adv = std::min(dt_adv, g.dx / umax);
+    if (vmax > 1e-12 && vmax < 1e6)
+        dt_adv = std::min(dt_adv, g.dy / vmax);
+    
+    // If advective limit is still 1e30 (no valid velocities), use diffusion limit
+    if (dt_adv >= 1e30)
+        dt_adv = dt_diff;
+    
+    // Ensure we have a reasonable minimum timestep
+    double dt_min = 1e-6;  // Increased minimum timestep
+    double dt = std::max(std::min(dt_adv, dt_diff), dt_min);
+    
+    // Apply CFL target
+    dt = CFL_target * dt;
+    
+    // Final safety check
+    dt = std::clamp(dt, dt_min, 1e-3);
+    
+    return dt;
 }
 
 double max_velocity(const Grid& g, const Field2D<double>& u, const Field2D<double>& v) {

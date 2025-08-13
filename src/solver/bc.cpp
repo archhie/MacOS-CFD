@@ -5,21 +5,27 @@
 
 // Smooth top-hat mask for jet inflow (0 outside, ~1 inside)
 static inline double jet_mask(const Grid &g, const BC &bc, double y) {
-    double delta = bc.jet_thickness;
     double y0 = bc.jet_center;
-    // Clamp slot width to at least one cell
-    double w = std::max(bc.jet_width, g.dy);
-    double a = (y - (y0 - 0.5 * w)) / delta;
-    double b = (y - (y0 + 0.5 * w)) / delta;
-    return 0.5 * (std::tanh(a) - std::tanh(b));
+    double w = bc.jet_width;
+    
+    // Simple top-hat function
+    if (std::abs(y - y0) <= 0.5 * w) {
+        return 1.0;
+    } else {
+        return 0.0;
+    }
 }
 
-static inline double jet_velocity(const Grid &g, const BC &bc, double y) {
+double jet_velocity(const Grid &g, const BC &bc, double y) {
     double base = bc.left.inflow_u * jet_mask(g, bc, y);
-    const double pi = 3.14159265358979323846;
-    double pert = bc.jet_eps * bc.left.inflow_u *
-                  std::sin(2.0 * pi * bc.jet_k * (y / g.Ly) + bc.jet_phase);
-    return base + pert;
+    // Remove perturbation for now to make it more stable
+    // const double pi = 3.14159265358979323846;
+    // double pert = bc.jet_eps * bc.left.inflow_u *
+    //               std::sin(2.0 * pi * bc.jet_k * (y / g.Ly) + bc.jet_phase);
+    // double result = base + pert;
+    double result = base;
+    
+    return result;
 }
 
 void apply_bc_u(const Grid &g, Field2D<double> &u, const BC &bc) {

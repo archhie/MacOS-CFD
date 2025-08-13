@@ -119,10 +119,15 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
     std::memset(s.data, 0, total * sizeof(double));
     std::memset(Ap.data, 0, total * sizeof(double));
 
+    // Pin pressure at (0,0) to handle nullspace
+    p.at_raw(g.ngx, g.ngy) = 0.0;
+
     if (params.type == PressureSolverType::Multigrid) {
         double res = 0.0;
         for (int cycle = 0; cycle < params.vcycles; ++cycle) {
             res = smooth(p, rhs, params.rbgs_sweeps);
+            // Re-pin pressure after each cycle
+            p.at_raw(g.ngx, g.ngy) = 0.0;
             if (res < params.tol)
                 break;
         }
@@ -185,6 +190,9 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
                 r.at_raw(ii, jj) -= alpha * Ap.at_raw(ii, jj);
             }
         }
+
+        // Re-pin pressure after each iteration
+        p.at_raw(g.ngx, g.ngy) = 0.0;
 
         res_norm = std::sqrt(std::max(0.0, dot(r, r)));
         if (!std::isfinite(res_norm) || res_norm < params.tol)

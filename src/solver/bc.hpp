@@ -26,6 +26,9 @@ struct BC {
     double jet_phase = 0.0;      // perturbation phase
 };
 
+// Jet velocity profile function
+double jet_velocity(const Grid& g, const BC& bc, double y);
+
 void apply_bc_u(const Grid&, Field2D<double>&, const BC&);
 void apply_bc_v(const Grid&, Field2D<double>&, const BC&);
 void apply_bc_p(const Grid&, Field2D<double>&, const BC&);

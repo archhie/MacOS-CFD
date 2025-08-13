@@ -9,6 +9,9 @@
 #include "project.hpp"
 #include "state.hpp"
 
+// Helper function to sanitize field values (replace non-finite with 0)
+void sanitize_field(Field2D<double>& field);
+
 // RK2 (Heun) time integrator with projection for incompressible flow.
 struct TimeIntegrator {
     const Grid &g;

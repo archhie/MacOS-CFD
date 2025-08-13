@@ -17,6 +17,7 @@
 #include "solver/pressure.hpp"
 #include "solver/state.hpp"
 #include "solver/time_integrator.hpp"
+#include "solver/advection.hpp"
 
 static void save_vtk(const Grid &g, const State &s, const std::string &path) {
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
@@ -50,7 +51,7 @@ static void save_vtk(const Grid &g, const State &s, const std::string &path) {
 int main(int argc, char **argv) {
     bool no_gui = false;
     double Re = 1000.0;
-    double CFL_target = 0.5;
+    double CFL_target = 0.1;  // Reduced from 0.5 for more stability
     PressureParams pp;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -74,6 +75,24 @@ int main(int argc, char **argv) {
             pp.tol = std::stod(arg.substr(6));
         } else if (arg.rfind("--pcg-iters=", 0) == 0) {
             pp.pcg_max_iters = std::stoi(arg.substr(12));
+        } else if (arg == "--tvd-debug") {
+            tvd_debug = true;
+            std::fprintf(stderr, "TVD debugging enabled\n");
+        } else if (arg == "--help") {
+            std::printf("CFD2D GUI - 2D Computational Fluid Dynamics\n");
+            std::printf("Usage: %s [options]\n", argv[0]);
+            std::printf("Options:\n");
+            std::printf("  --no-gui              Run in headless mode\n");
+            std::printf("  --Re=<value>          Set Reynolds number (default: 1000)\n");
+            std::printf("  --CFL=<value>         Set CFL condition (default: 0.1)\n");
+            std::printf("  --solver=<pcg|mg>     Pressure solver type (default: pcg)\n");
+            std::printf("  --mg-levels=<n>       Multigrid levels (default: 3)\n");
+            std::printf("  --vcycles=<n>         Multigrid V-cycles (default: 2)\n");
+            std::printf("  --tol=<value>         Solver tolerance (default: 1e-6)\n");
+            std::printf("  --pcg-iters=<n>       PCG max iterations (default: 100)\n");
+            std::printf("  --tvd-debug           Enable TVD debugging output\n");
+            std::printf("  --help                Show this help message\n");
+            return 0;
         }
     }
 
@@ -100,10 +119,10 @@ int main(int argc, char **argv) {
     size_t szs = static_cast<size_t>(state.scalar.pitch) *
                  (state.scalar.ny + 2 * state.scalar.ngy);
     std::memset(state.scalar.data, 0, szs * sizeof(float));
-    integrator.clear_work();
 
     PressureSolver pressure(grid);
     TimeIntegrator integrator(grid);
+    integrator.clear_work();
     BC bc;
     bc.left.type = BCType::Inflow;
     bc.right.type = BCType::Outflow;
@@ -111,13 +130,16 @@ int main(int argc, char **argv) {
     bc.bottom.type = BCType::Wall;
     bc.left.inflow_u = 1.0;
     bc.left.inflow_v = 0.0;
-    bc.jet_center = 0.5;
-    bc.jet_width = 0.2;
+    bc.jet_center = 0.5;  // Center of the domain in actual coordinates
+    bc.jet_width = 0.18;  // Width in actual coordinates
+    bc.jet_thickness = 0.02;  // Thickness in actual coordinates
+    bc.jet_eps = 0.03;
+    bc.jet_k = 8;
 
     if (no_gui) {
         double sim_time = 0.0;
         double pres_res = 0.0;
-        for (int step = 0; step < 100; ++step) {
+        for (int step = 0; step < 2000; ++step) {
             double dt = integrator.step(state, bc, Re, CFL_target, pressure, pp,
                                         pres_res);
             sim_time += dt;
@@ -233,6 +255,7 @@ int main(int argc, char **argv) {
         gui.end_frame(window);
 
         if (gui.reset || gui.reset_run) {
+            // Clear all fields and scratch arrays
             clear_field(state.u);
             clear_field(state.v);
             clear_field(state.p);
@@ -255,6 +278,8 @@ int main(int argc, char **argv) {
 
             sim_time = 0.0;
             step = 0;
+            pres_res = 0.0;
+            last_dt = 0.0;
             bool run_flag = gui.reset_run;
             gui.reset = false;
             gui.reset_run = false;
@@ -275,7 +300,7 @@ int main(int argc, char **argv) {
                         last_dt, umax, vmax, divL2, pres_res,
                         bc.left.inflow_u, bc.jet_width);
             if (!std::isfinite(divL2) || !std::isfinite(pres_res))
-                std::printf("NaN detected -> skipping projection this step\n");
+                std::printf("WARNING: NaN detected in divergence or pressure residual\n");
         }
     }
 

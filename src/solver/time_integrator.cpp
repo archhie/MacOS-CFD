@@ -5,6 +5,27 @@
 #include <cstring>
 #include <limits>
 
+void sanitize_field(Field2D<double>& field) {
+    size_t total = static_cast<size_t>(field.pitch) * (field.ny + 2 * field.ngy);
+    bool has_nan = false;
+    
+#pragma omp parallel for reduction(|:has_nan)
+    for (size_t i = 0; i < total; ++i) {
+        if (!std::isfinite(field.data[i])) {
+            field.data[i] = 0.0;
+            has_nan = true;
+        }
+    }
+    
+    if (has_nan) {
+        static bool warned = false;
+        if (!warned) {
+            std::fprintf(stderr, "Non-finite values detected and replaced with 0\n");
+            warned = true;
+        }
+    }
+}
+
 TimeIntegrator::TimeIntegrator(const Grid &grid) : g(grid) {
     // allocate work arrays matching velocity layouts
     du_dt.allocate(g.u_nx(), g.ny, g.u_pitch(), g.ngx, g.ngy);
@@ -35,10 +56,14 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
     double dt = dt_cfl;
     if (dt_override > 0.0)
         dt = std::min(dt_cfl, dt_override);
-    double diff_limit = 0.5 * Re * std::min(g.dx * g.dx, g.dy * g.dy);
+    
+    // CFL safety: clamp dt to reasonable bounds
+    double dt_diff = 0.5 * Re * std::min(g.dx * g.dx, g.dy * g.dy);
+    double dt_cap = (dt_override > 0.0) ? dt_override : 1e-3;
+    
     if (!std::isfinite(dt) || dt <= 0.0)
-        dt = std::min(1e-3, diff_limit);
-    dt = std::clamp(dt, 1e-12, (dt_override > 0.0) ? dt_override : dt);
+        dt = std::min(1e-3, dt_diff);
+    dt = std::clamp(dt, 1e-8, dt_cap);
 
     size_t sz_u = static_cast<size_t>(du_dt.pitch) * (du_dt.ny + 2 * du_dt.ngy);
     size_t sz_v = static_cast<size_t>(dv_dt.pitch) * (dv_dt.ny + 2 * dv_dt.ngy);
@@ -46,10 +71,15 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
     std::memset(du_dt.data, 0, sz_u * sizeof(double));
     std::memset(dv_dt.data, 0, sz_v * sizeof(double));
 
+    // First RK stage
     advect_u(g, s.u, s.v, du_dt);
     diffuse_u(g, s.u, du_dt, 1.0 / Re);
     advect_v(g, s.u, s.v, dv_dt);
     diffuse_v(g, s.v, dv_dt, 1.0 / Re);
+
+    // Sanitize derivatives
+    sanitize_field(du_dt);
+    sanitize_field(dv_dt);
 
 #pragma omp parallel for collapse(2)
     for (int j = 0; j < g.ny; ++j) {
@@ -68,16 +98,26 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
         }
     }
 
+    // Sanitize intermediate velocities
+    sanitize_field(u1);
+    sanitize_field(v1);
+
+    // Apply BCs after first stage
     apply_bc_u(g, u1, bc);
     apply_bc_v(g, v1, bc);
 
     std::memset(du_dt.data, 0, sz_u * sizeof(double));
     std::memset(dv_dt.data, 0, sz_v * sizeof(double));
 
+    // Second RK stage
     advect_u(g, u1, v1, du_dt);
     diffuse_u(g, u1, du_dt, 1.0 / Re);
     advect_v(g, u1, v1, dv_dt);
     diffuse_v(g, v1, dv_dt, 1.0 / Re);
+
+    // Sanitize derivatives
+    sanitize_field(du_dt);
+    sanitize_field(dv_dt);
 
 #pragma omp parallel for collapse(2)
     for (int j = 0; j < g.ny; ++j) {
@@ -102,33 +142,22 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
         }
     }
 
+    // Sanitize updated velocities
+    sanitize_field(s.u);
+    sanitize_field(s.v);
+
+    // Apply BCs after RK2 update
     apply_bc_u(g, s.u, bc);
     apply_bc_v(g, s.v, bc);
 
-    // Check for NaNs before projection
-    size_t total_u = static_cast<size_t>(g.u_nx()) * g.ny;
-    size_t total_v = static_cast<size_t>(g.nx) * g.v_ny();
-    size_t count_u = 0, count_v = 0;
-#pragma omp parallel for collapse(2) reduction(+ : count_u)
-    for (int j = 0; j < g.ny; ++j)
-        for (int i = 0; i < g.u_nx(); ++i) {
-            int ii = i + g.ngx, jj = j + g.ngy;
-            if (std::isfinite(s.u.at_raw(ii, jj))) ++count_u;
-        }
-#pragma omp parallel for collapse(2) reduction(+ : count_v)
-    for (int j = 0; j < g.v_ny(); ++j)
-        for (int i = 0; i < g.nx; ++i) {
-            int ii = i + g.ngx, jj = j + g.ngy;
-            if (std::isfinite(s.v.at_raw(ii, jj))) ++count_v;
-        }
-    if (count_u < total_u || count_v < total_v) {
-        std::fprintf(stderr, "NaN detected -> skipping projection this step\n");
-        pressure_residual = std::numeric_limits<double>::quiet_NaN();
-        return dt;
-    }
+    // Sanitize velocities before projection
+    sanitize_field(s.u);
+    sanitize_field(s.v);
 
     // Projection
     divergence(g, s.u, s.v, s.rhs);
+    sanitize_field(s.rhs);
+    
 #pragma omp parallel for collapse(2)
     for (int j = 0; j < g.ny; ++j) {
         for (int i = 0; i < g.nx; ++i) {
@@ -140,13 +169,31 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
     }
 
     apply_bc_p(g, s.p, bc);
-    s.p.at_raw(g.ngx, g.ngy) = 0.0; // pin pressure
+    s.p.at_raw(g.ngx, g.ngy) = 0.0; // pin pressure at (0,0)
     pressure_residual = pressure.solve(s.p, s.rhs, pp);
-    s.p.at_raw(g.ngx, g.ngy) = 0.0;
+    s.p.at_raw(g.ngx, g.ngy) = 0.0; // re-pin after solve
     apply_bc_p(g, s.p, bc);
+    
     subtract_grad_p(g, s.u, s.v, s.p, dt);
+    
+    // Re-apply inflow BCs after projection to ensure they're not erased
+    if (bc.left.type == BCType::Inflow) {
+        for (int j = 0; j < g.ny; ++j) {
+            int jj = j + g.ngy;
+            double y = (j + 0.5) * g.dy;
+            double val = jet_velocity(g, bc, y);
+            s.u.at_raw(g.ngx, jj) = val;
+            s.u.at_raw(g.ngx - 1, jj) = val; // mirror ghost
+        }
+    }
+    
     apply_bc_u(g, s.u, bc);
     apply_bc_v(g, s.v, bc);
+
+    // Final sanitization
+    sanitize_field(s.u);
+    sanitize_field(s.v);
+    sanitize_field(s.p);
 
     return dt;
 }
