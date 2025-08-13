@@ -89,8 +89,14 @@ int main(int argc, char **argv) {
     PressureSolver pressure(grid);
     TimeIntegrator integrator(grid);
     BC bc;
-    bc.top = BCType::Moving;
-    bc.movingU = 1.0;
+    bc.left.type = BCType::Inflow;
+    bc.right.type = BCType::Outflow;
+    bc.top.type = BCType::Wall;
+    bc.bottom.type = BCType::Wall;
+    bc.left.inflow_u = 1.0;
+    bc.left.inflow_v = 0.0;
+    bc.jet_center = 0.5;
+    bc.jet_width = 0.2;
 
     if (no_gui) {
         double sim_time = 0.0;
@@ -99,8 +105,10 @@ int main(int argc, char **argv) {
             double dt = integrator.step(state, bc, Re, CFL_target, pressure, pp,
                                         pres_res);
             sim_time += dt;
+            double divL2 = divergence_l2(grid, state.u, state.v);
             if (step % 10 == 0) {
-                std::printf("step %d time %g res %g\n", step, sim_time, pres_res);
+                std::printf("step %d time %g dt %g div %g res %g\n", step,
+                            sim_time, dt, divL2, pres_res);
             }
         }
         save_vtk(grid, state, "out/final.vtk");
@@ -125,6 +133,8 @@ int main(int argc, char **argv) {
 
     Gui gui;
     gui.init(window);
+    gui.bc = bc;
+    gui.Ly = grid.Ly;
 
     GLuint tex = 0;
     glGenTextures(1, &tex);
@@ -133,6 +143,7 @@ int main(int argc, char **argv) {
     int step = 0;
     double sim_time = 0.0;
     double pres_res = 0.0;
+    double last_dt = 0.0;
 
     while (!glfwWindowShouldClose(window)) {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -142,17 +153,19 @@ int main(int argc, char **argv) {
         gui.begin_frame();
 
         if (gui.running || gui.step) {
-            double dt = integrator.step(state, bc, gui.Re, gui.CFL, pressure, pp,
-                                        pres_res, gui.dt);
-            sim_time += dt;
+            bc = gui.bc;
+            last_dt = integrator.step(state, bc, gui.Re, gui.CFL, pressure, pp,
+                                      pres_res, gui.dt);
+            sim_time += last_dt;
             step++;
             gui.step = false;
         }
 
         double max_vel = max_velocity(grid, state.u, state.v);
+        double divL2 = divergence_l2(grid, state.u, state.v);
         update_field_texture(grid, state, gui.field, tex, texbuf);
 
-        gui.draw(step, sim_time, max_vel, pres_res, tex);
+        gui.draw(step, sim_time, last_dt, max_vel, divL2, pres_res, tex);
 
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
@@ -177,6 +190,7 @@ int main(int argc, char **argv) {
             step = 0;
             gui.reset = false;
         }
+        gui.bc = bc;
     }
 
     save_vtk(grid, state, "out/final.vtk");

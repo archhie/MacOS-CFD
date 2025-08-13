@@ -48,3 +48,23 @@ double max_velocity(const Grid& g, const Field2D<double>& u, const Field2D<doubl
     }
     return vmax;
 }
+
+double divergence_l2(const Grid& g, const Field2D<double>& u,
+                     const Field2D<double>& v) {
+    double idx = 1.0 / g.dx;
+    double idy = 1.0 / g.dy;
+    double sum = 0.0;
+#pragma omp parallel for collapse(2) reduction(+ : sum)
+    for (int j = 0; j < g.ny; ++j) {
+        for (int i = 0; i < g.nx; ++i) {
+            int ii = i + g.ngx;
+            int jj = j + g.ngy;
+            double divx = u.at_raw(ii + 1, jj) - u.at_raw(ii, jj);
+            double divy = v.at_raw(ii, jj + 1) - v.at_raw(ii, jj);
+            double d = divx * idx + divy * idy;
+            sum += d * d;
+        }
+    }
+    double denom = static_cast<double>(g.nx) * g.ny;
+    return std::sqrt(sum / denom);
+}
