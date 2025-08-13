@@ -12,9 +12,6 @@
 #include "solver/bc.hpp"
 #include "solver/grid.hpp"
 #include "solver/state.hpp"
-#include "solver/advection.hpp"
-#include "solver/diffusion.hpp"
-#include "solver/metrics.hpp"
 
 static std::string load_file(const char* path) {
     std::ifstream f(path);
@@ -81,20 +78,7 @@ int main() {
     state.rhs.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
     state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
     state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
-    Field2D<double> du_dt, dv_dt;
-    du_dt.allocate(grid.u_nx(), grid.ny, grid.u_pitch(), grid.ngx, grid.ngy);
-    dv_dt.allocate(grid.nx, grid.v_ny(), grid.v_pitch(), grid.ngx, grid.ngy);
 
-    for (int j = 0; j < state.u.ny + 2 * state.u.ngy; ++j)
-        for (int i = 0; i < state.u.pitch; ++i)
-            state.u.at_raw(i, j) = 1.0;
-    for (int j = 0; j < state.v.ny + 2 * state.v.ngy; ++j)
-        for (int i = 0; i < state.v.pitch; ++i)
-            state.v.at_raw(i, j) = 0.0;
-
-    double Re = 2000.0;
-    double CFL_target = 0.5;
-    int frame = 0;
     printf("Grid: %d x %d (dx=%g, dy=%g)\n", grid.nx, grid.ny, grid.dx, grid.dy);
 
     float verts[] = {
