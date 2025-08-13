@@ -25,9 +25,20 @@ void Gui::begin_frame() {
 void Gui::draw(int timestep, double sim_time, double max_velocity,
                double pressure_residual, GLuint texture) {
     ImGui::Begin("CFD Controls");
-    ImGui::SliderDouble("Re", &Re, 100.0, 10000.0);
-    ImGui::SliderDouble("CFL", &CFL, 0.1, 1.0);
-    ImGui::SliderDouble("dt", &dt, 1e-4, 1e-1, "%.5f", ImGuiSliderFlags_Logarithmic);
+    
+    // Convert doubles to floats for ImGui sliders
+    float re_float = static_cast<float>(Re);
+    float cfl_float = static_cast<float>(CFL);
+    float dt_float = static_cast<float>(dt);
+    
+    ImGui::SliderFloat("Re", &re_float, 100.0f, 10000.0f);
+    ImGui::SliderFloat("CFL", &cfl_float, 0.1f, 1.0f);
+    ImGui::SliderFloat("dt", &dt_float, 1e-4f, 1e-1f, "%.5f");
+    
+    // Convert back to doubles
+    Re = static_cast<double>(re_float);
+    CFL = static_cast<double>(cfl_float);
+    dt = static_cast<double>(dt_float);
 
     if (ImGui::Button(running ? "Pause" : "Run"))
         running = !running;

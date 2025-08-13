@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(OpenGL REQUIRED)
+find_package(glfw3 3.3 REQUIRED CONFIG)
+
 add_library(imgui
     third_party/imgui/imgui.cpp
     third_party/imgui/imgui_draw.cpp
@@ -18,6 +21,9 @@ target_include_directories(imgui PUBLIC
     third_party/imgui
     third_party/imgui/backends
 )
+
+# Link GLFW to imgui target to get proper include directories
+target_link_libraries(imgui PRIVATE glfw)
 
 file(GLOB SRC_FILES
     src/*.cpp
@@ -47,9 +53,6 @@ target_include_directories(cfd2d_gui PUBLIC
     third_party
 )
 
-find_package(OpenGL REQUIRED)
-find_package(glfw3 3.3 REQUIRED CONFIG)
-
 find_package(OpenMP)
 if (OpenMP_CXX_FOUND)
     target_link_libraries(cfd2d_gui PRIVATE OpenMP::OpenMP_CXX)
@@ -62,3 +65,6 @@ set_target_properties(cfd2d_gui PROPERTIES
 target_link_libraries(cfd2d_gui PRIVATE imgui glfw OpenGL::GL)
 
 target_compile_options(cfd2d_gui PRIVATE -O3 -Wall -Wextra -pedantic)
+
+# Suppress OpenGL deprecation warnings on macOS
+target_compile_definitions(cfd2d_gui PRIVATE GL_SILENCE_DEPRECATION)
