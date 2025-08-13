@@ -15,10 +15,10 @@ class Gui {
 
     enum class Preset { JetPlume, LidDrivenCavity, PeriodicShear };
 
-    double Re = 1000.0;
-    double CFL = 0.5;
+    double Re = 50.0;  // Updated to working value
+    double CFL = 0.01;  // Updated to working value
     double dt = 0.001;  // dt override
-    bool running = true;
+    bool running = false;  // Changed to false - simulation starts paused
     bool step = false;
     bool reset = false;          // generic reset
     bool apply_preset = false;   // trigger to apply chosen preset
@@ -28,6 +28,7 @@ class Gui {
     BC bc;             // boundary condition settings
     double Ly = 1.0;   // domain height for jet sliders
     bool inflow_inactive = false;
+    double sim_speed = 1.0;      // Simulation speed multiplier
 
     bool init(GLFWwindow *window);
     void begin_frame();

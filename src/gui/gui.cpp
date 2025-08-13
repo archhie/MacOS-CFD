@@ -33,13 +33,21 @@ void Gui::draw(int timestep, double sim_time, double dt, double max_velocity,
     float cfl_float = static_cast<float>(CFL);
     float dt_float = static_cast<float>(this->dt);
     
-    ImGui::SliderFloat("Re", &re_float, 1.0f, 10000.0f);
-    ImGui::SliderFloat("CFL", &cfl_float, 0.1f, 2.0f);
-    ImGui::SliderFloat("dt", &dt_float, 0.0001f, 0.01f);
+    // Updated slider ranges for working parameters
+    ImGui::SliderFloat("Re", &re_float, 10.0f, 1000.0f, "%.1f");
+    ImGui::SliderFloat("CFL", &cfl_float, 0.001f, 0.5f, "%.3f");
+    ImGui::SliderFloat("dt override", &dt_float, 0.0001f, 0.01f, "%.4f");
     
     Re = static_cast<double>(re_float);
     CFL = static_cast<double>(cfl_float);
     this->dt = static_cast<double>(dt_float);
+    
+    ImGui::Separator();
+    
+    // Simulation speed control
+    float speed_float = static_cast<float>(sim_speed);
+    ImGui::SliderFloat("Sim Speed", &speed_float, 0.1f, 5.0f, "%.1fx");
+    sim_speed = static_cast<double>(speed_float);
     
     ImGui::Checkbox("Running", &running);
     if (ImGui::Button("Step")) {
@@ -52,8 +60,11 @@ void Gui::draw(int timestep, double sim_time, double dt, double max_velocity,
         reset_run = true;
     }
     
+    ImGui::Separator();
+    
     ImGui::Text("Timestep: %d", timestep);
     ImGui::Text("Time: %.6f", sim_time);
+    ImGui::Text("dt: %.6f", dt);
     ImGui::Text("Max velocity: %.6f", max_velocity);
     ImGui::Text("Divergence L2: %.2e", div_l2);
     ImGui::Text("Pressure residual: %.2e", pressure_residual);

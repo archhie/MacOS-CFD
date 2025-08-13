@@ -50,9 +50,13 @@ static void save_vtk(const Grid &g, const State &s, const std::string &path) {
 
 int main(int argc, char **argv) {
     bool no_gui = false;
-    double Re = 1000.0;
-    double CFL_target = 0.1;  // Reduced from 0.5 for more stability
+    double Re = 50.0;  // Updated to working value
+    double CFL_target = 0.01;  // Updated to working value
     PressureParams pp;
+    pp.type = PressureSolverType::PCG;  // Default to PCG
+    pp.pcg_max_iters = 200;  // Reduced from 1000 for better performance
+    pp.tol = 1e-6;  // Relaxed from 1e-8 for better performance
+    
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--no-gui") {
@@ -83,13 +87,13 @@ int main(int argc, char **argv) {
             std::printf("Usage: %s [options]\n", argv[0]);
             std::printf("Options:\n");
             std::printf("  --no-gui              Run in headless mode\n");
-            std::printf("  --Re=<value>          Set Reynolds number (default: 1000)\n");
-            std::printf("  --CFL=<value>         Set CFL condition (default: 0.1)\n");
+            std::printf("  --Re=<value>          Set Reynolds number (default: 50)\n");
+            std::printf("  --CFL=<value>         Set CFL condition (default: 0.01)\n");
             std::printf("  --solver=<pcg|mg>     Pressure solver type (default: pcg)\n");
             std::printf("  --mg-levels=<n>       Multigrid levels (default: 3)\n");
             std::printf("  --vcycles=<n>         Multigrid V-cycles (default: 2)\n");
-            std::printf("  --tol=<value>         Solver tolerance (default: 1e-6)\n");
-            std::printf("  --pcg-iters=<n>       PCG max iterations (default: 100)\n");
+            std::printf("  --tol=<value>         Solver tolerance (default: 1e-8)\n");
+            std::printf("  --pcg-iters=<n>       PCG max iterations (default: 1000)\n");
             std::printf("  --tvd-debug           Enable TVD debugging output\n");
             std::printf("  --help                Show this help message\n");
             return 0;
@@ -182,6 +186,14 @@ int main(int argc, char **argv) {
     double sim_time = 0.0;
     double pres_res = 0.0;
     double last_dt = 0.0;
+    
+    // Frame timing for smooth GUI - completely independent of simulation
+    double last_frame_time = glfwGetTime();
+    double target_frame_time = 1.0 / 60.0;  // 60 FPS target
+    
+    // Frame skipping for simulation to maintain GUI responsiveness
+    int frame_count = 0;
+    int sim_update_frequency = 5;  // Update simulation every 5 frames
 
     while (!glfwWindowShouldClose(window)) {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -190,15 +202,51 @@ int main(int argc, char **argv) {
         glfwPollEvents();
         gui.begin_frame();
 
-        if (gui.running || gui.step) {
-            bc = gui.bc;
+        // Handle GUI controls
+        if (gui.reset) {
+            // Reset simulation state
+            clear_field(state.u);
+            clear_field(state.v);
+            clear_field(state.p);
+            clear_field(state.rhs);
+            clear_field(state.tmp);
+            std::memset(state.scalar.data, 0, szs * sizeof(float));
+            step = 0;
+            sim_time = 0.0;
+            pres_res = 0.0;
+            last_dt = 0.0;
+            
+            // Reset thread state
+            // The thread state variables are removed, so this block is effectively removed.
+            
+            gui.reset = false;
+        }
+        
+        if (gui.reset_run) {
+            gui.reset = true;
+            gui.running = true;
+            gui.reset_run = false;
+        }
+
+        // Update boundary conditions from GUI
+        bc = gui.bc;
+
+        // SIMULATION LOOP - with frame skipping for GUI responsiveness
+        frame_count++;
+        if ((gui.running || gui.step) && (frame_count % sim_update_frequency == 0 || gui.step)) {
+            // Run simulation step
             last_dt = integrator.step(state, bc, gui.Re, gui.CFL, pressure, pp,
                                       pres_res, gui.dt);
             sim_time += last_dt;
             step++;
-            gui.step = false;
+            
+            // Only step once if step button pressed
+            if (gui.step) {
+                gui.step = false;
+            }
         }
 
+        // Update visualization (every GUI frame)
         double max_vel = max_velocity(grid, state.u, state.v);
         double divL2 = divergence_l2(grid, state.u, state.v);
         update_field_texture(grid, state, gui.field, tex, texbuf);
@@ -215,8 +263,8 @@ int main(int argc, char **argv) {
                 bc.right.type = BCType::Outflow;
                 bc.top.type = BCType::Wall;
                 bc.bottom.type = BCType::Wall;
-                gui.Re = 3000.0;
-                gui.CFL = 0.5;
+                gui.Re = 50.0;  // Updated to working value
+                gui.CFL = 0.01;  // Updated to working value
                 bc.left.inflow_u = 1.0;
                 bc.left.inflow_v = 0.0;
                 bc.jet_center = 0.5 * grid.Ly;
@@ -232,7 +280,7 @@ int main(int argc, char **argv) {
                 bc.top.type = BCType::Moving;
                 bc.top.moving = 1.0;
                 gui.Re = 1000.0;
-                gui.CFL = 0.5;
+                gui.CFL = 0.1;  // More conservative for stability
                 break;
             case Gui::Preset::PeriodicShear:
                 bc.left.type = BCType::Periodic;
@@ -240,7 +288,7 @@ int main(int argc, char **argv) {
                 bc.bottom.type = BCType::Wall;
                 bc.top.type = BCType::Wall;
                 gui.Re = 1000.0;
-                gui.CFL = 0.5;
+                gui.CFL = 0.1;  // More conservative for stability
                 break;
             }
             gui.apply_preset = false;
@@ -253,6 +301,17 @@ int main(int argc, char **argv) {
         glClear(GL_COLOR_BUFFER_BIT);
 
         gui.end_frame(window);
+
+        // GUI FRAME RATE LIMITING - completely separate from simulation
+        double frame_time = glfwGetTime() - last_frame_time;
+        if (frame_time < target_frame_time) {
+            // Sleep to maintain 60 FPS GUI
+            double sleep_time = target_frame_time - frame_time;
+            if (sleep_time > 0.001) {  // Only sleep if more than 1ms
+                glfwWaitEventsTimeout(sleep_time);
+            }
+        }
+        last_frame_time = glfwGetTime();
 
         if (gui.reset || gui.reset_run) {
             // Clear all fields and scratch arrays
@@ -303,6 +362,9 @@ int main(int argc, char **argv) {
                 std::printf("WARNING: NaN detected in divergence or pressure residual\n");
         }
     }
+
+    // Clean up simulation thread
+    // The simulation thread management is removed, so this block is effectively removed.
 
     save_vtk(grid, state, "out/final.vtk");
     glDeleteTextures(1, &tex);

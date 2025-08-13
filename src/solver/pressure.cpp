@@ -112,22 +112,11 @@ double PressureSolver::smooth(Field2D<double> &p, const Field2D<double> &rhs,
 
 double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
                              const PressureParams &params) {
-    size_t total = static_cast<size_t>(r.pitch) * (r.ny + 2 * r.ngy);
-    std::memset(p.data, 0, total * sizeof(double));
-    std::memset(r.data, 0, total * sizeof(double));
-    std::memset(z.data, 0, total * sizeof(double));
-    std::memset(s.data, 0, total * sizeof(double));
-    std::memset(Ap.data, 0, total * sizeof(double));
-
-    // Pin pressure at (0,0) to handle nullspace
-    p.at_raw(g.ngx, g.ngy) = 0.0;
-
     if (params.type == PressureSolverType::Multigrid) {
-        double res = 0.0;
-        for (int cycle = 0; cycle < params.vcycles; ++cycle) {
-            res = smooth(p, rhs, params.rbgs_sweeps);
-            // Re-pin pressure after each cycle
-            p.at_raw(g.ngx, g.ngy) = 0.0;
+        // Multigrid solver
+        double res = 1e9;
+        for (int vcycle = 0; vcycle < params.vcycles; ++vcycle) {
+            res = smooth(p, rhs, 2);
             if (res < params.tol)
                 break;
         }
@@ -139,7 +128,20 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
         return last_residual_;
     }
 
-    // PCG solver
+    // PCG solver with proper Neumann BCs and pressure pinning
+    // Clear pressure field first
+    size_t total = static_cast<size_t>(p.pitch) * (p.ny + 2 * p.ngy);
+    std::memset(p.data, 0, total * sizeof(double));
+    
+    // Pin pressure at (0,0) to kill nullspace
+    p.at_raw(g.ngx, g.ngy) = 0.0;
+    
+    // Apply Neumann boundary conditions: ∂p/∂n = 0
+    // This is handled implicitly by the Laplacian operator
+    // For walls: ∂p/∂n = 0 means no pressure gradient normal to wall
+    // For inflow/outflow: ∂p/∂n = 0 is a reasonable approximation
+    
+    // Initialize residual: r = rhs - A*p
     apply_laplacian(p, Ap);
 #pragma omp parallel for collapse(2)
     for (int j = 0; j < g.ny; ++j) {
@@ -154,10 +156,11 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
         }
     }
 
+    // Preconditioner: diagonal scaling
     double idx2 = 1.0 / (g.dx * g.dx);
     double idy2 = 1.0 / (g.dy * g.dy);
     double diag = 2.0 * (idx2 + idy2);
-    double inv_diag = -1.0 / std::max(diag, 1e-12);
+    double inv_diag = 1.0 / std::max(diag, 1e-12);
 
 #pragma omp parallel for collapse(2)
     for (int j = 0; j < g.ny; ++j) {
@@ -171,16 +174,18 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
 
     double rho = dot(r, z);
     double res_norm = std::sqrt(std::max(0.0, dot(r, r)));
+    double initial_res = res_norm;
 
     for (int iter = 0; iter < params.pcg_max_iters && res_norm > params.tol;
          ++iter) {
         apply_laplacian(s, Ap);
         double denom = dot(s, Ap);
         if (!std::isfinite(denom) || std::abs(denom) < 1e-20) {
-            std::fprintf(stderr, "PCG breakdown\n");
+            std::fprintf(stderr, "PCG breakdown at iteration %d\n", iter);
             break;
         }
         double alpha = rho / denom;
+        
 #pragma omp parallel for collapse(2)
         for (int j = 0; j < g.ny; ++j) {
             for (int i = 0; i < g.nx; ++i) {
@@ -191,13 +196,14 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
             }
         }
 
-        // Re-pin pressure after each iteration
+        // Re-pin pressure at (0,0) after each iteration to maintain nullspace elimination
         p.at_raw(g.ngx, g.ngy) = 0.0;
 
         res_norm = std::sqrt(std::max(0.0, dot(r, r)));
         if (!std::isfinite(res_norm) || res_norm < params.tol)
             break;
 
+        // Precondition residual
 #pragma omp parallel for collapse(2)
         for (int j = 0; j < g.ny; ++j) {
             for (int i = 0; i < g.nx; ++i) {
@@ -206,10 +212,12 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
                 z.at_raw(ii, jj) = inv_diag * r.at_raw(ii, jj);
             }
         }
+        
         double rho_new = dot(r, z);
         if (!std::isfinite(rho_new))
             break;
         double beta = rho_new / rho;
+        
 #pragma omp parallel for collapse(2)
         for (int j = 0; j < g.ny; ++j) {
             for (int i = 0; i < g.nx; ++i) {
@@ -220,11 +228,16 @@ double PressureSolver::solve(Field2D<double> &p, const Field2D<double> &rhs,
         }
         rho = rho_new;
     }
+    
     last_residual_ = std::isfinite(res_norm) ? res_norm : 1e9;
     if (!std::isfinite(res_norm) && !warned_nan_) {
         std::fprintf(stderr, "Non-finite pressure residual\n");
         warned_nan_ = true;
     }
+    
+    // Final pressure pinning
+    p.at_raw(g.ngx, g.ngy) = 0.0;
+    
     return last_residual_;
 }
 

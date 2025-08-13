@@ -154,10 +154,23 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
     sanitize_field(s.u);
     sanitize_field(s.v);
 
-    // Projection
+    // Projection step: ∇²p = (1/dt)*div, with proper logging
     divergence(g, s.u, s.v, s.rhs);
     sanitize_field(s.rhs);
     
+    // Log divergence before projection
+    double div_before = 0.0;
+    for (int j = 0; j < g.ny; ++j) {
+        for (int i = 0; i < g.nx; ++i) {
+            int ii = i + g.ngx;
+            int jj = j + g.ngy;
+            double val = s.rhs.at_raw(ii, jj);
+            div_before += val * val;
+        }
+    }
+    div_before = std::sqrt(div_before / (g.nx * g.ny));
+    
+    // Scale RHS by 1/dt for pressure solve: ∇²p = (1/dt)*div
 #pragma omp parallel for collapse(2)
     for (int j = 0; j < g.ny; ++j) {
         for (int i = 0; i < g.nx; ++i) {
@@ -168,27 +181,54 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
         }
     }
 
-    apply_bc_p(g, s.p, bc);
+    // Pressure solve: ∇²p = (1/dt)*div with Neumann BCs everywhere
+    // Pressure is pinned at p(0,0) = 0 to kill nullspace
     s.p.at_raw(g.ngx, g.ngy) = 0.0; // pin pressure at (0,0)
     pressure_residual = pressure.solve(s.p, s.rhs, pp);
     s.p.at_raw(g.ngx, g.ngy) = 0.0; // re-pin after solve
-    apply_bc_p(g, s.p, bc);
     
+    // Velocity correction: subtract grad p from u/v at faces
     subtract_grad_p(g, s.u, s.v, s.p, dt);
     
-    // Re-apply inflow BCs after projection to ensure they're not erased
+    // Immediately after projection, re-apply Dirichlet inflow u(i=0,j) and ghost values
     if (bc.left.type == BCType::Inflow) {
         for (int j = 0; j < g.ny; ++j) {
             int jj = j + g.ngy;
             double y = (j + 0.5) * g.dy;
             double val = jet_velocity(g, bc, y);
-            s.u.at_raw(g.ngx, jj) = val;
-            s.u.at_raw(g.ngx - 1, jj) = val; // mirror ghost
+            s.u.at_raw(g.ngx, jj) = val;      // inflow face
+            s.u.at_raw(g.ngx - 1, jj) = val;  // ghost cell
         }
     }
     
+    // Apply all boundary conditions after projection
     apply_bc_u(g, s.u, bc);
     apply_bc_v(g, s.v, bc);
+    apply_bc_p(g, s.p, bc);
+
+    // Log divergence after projection
+    divergence(g, s.u, s.v, s.rhs);
+    double div_after = 0.0;
+    for (int j = 0; j < g.ny; ++j) {
+        for (int i = 0; i < g.nx; ++i) {
+            int ii = i + g.ngx;
+            int jj = j + g.ngy;
+            double val = s.rhs.at_raw(ii, jj);
+            div_after += val * val;
+        }
+    }
+    div_after = std::sqrt(div_after / (g.nx * g.ny));
+    
+    // Log divergence reduction
+    if (div_before > 1e-12) {
+        double reduction = div_before / div_after;
+        static int log_counter = 0;
+        if (log_counter % 60 == 0) {  // Log every 60 steps
+            std::fprintf(stderr, "Divergence: before=%.2e, after=%.2e, reduction=%.1fx\n", 
+                        div_before, div_after, reduction);
+        }
+        log_counter++;
+    }
 
     // Final sanitization
     sanitize_field(s.u);
