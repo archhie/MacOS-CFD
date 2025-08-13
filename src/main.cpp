@@ -249,7 +249,14 @@ int main(int argc, char **argv) {
         // Update visualization (every GUI frame)
         double max_vel = max_velocity(grid, state.u, state.v);
         double divL2 = divergence_l2(grid, state.u, state.v);
-        update_field_texture(grid, state, gui.field, tex, texbuf);
+        
+        // Update field statistics for the GUI
+        gui.update_field_statistics(grid, state);
+        
+        // Update texture with new colormap and scaling options
+        update_field_texture(grid, state, gui.field, tex, texbuf, 
+                           gui.colormap, gui.color_scale_min, gui.color_scale_max, 
+                           gui.normalize_field);
 
         gui.inflow_inactive = (bc.left.type == BCType::Inflow &&
                                (std::abs(bc.left.inflow_u) < 1e-12 ||
