@@ -5,13 +5,21 @@
 
 enum class BCType { Wall, Moving, Inflow, Outflow, Periodic };
 
+struct BCSide {
+    BCType type = BCType::Wall;
+    double moving = 0.0;   // tangential speed for Moving
+    double inflow_u = 0.0; // specified inflow velocities
+    double inflow_v = 0.0;
+};
+
 struct BC {
-    BCType left = BCType::Wall;
-    BCType right = BCType::Wall;
-    BCType bottom = BCType::Wall;
-    BCType top = BCType::Wall;
-    double movingU = 1.0, movingV = 0.0;
-    double inflowUx = 1.0, inflowUy = 0.0;
+    BCSide left{BCType::Wall, 0.0, 1.0, 0.0};
+    BCSide right;
+    BCSide bottom;
+    BCSide top;
+    // Jet inflow parameters (used on left when type==Inflow)
+    double jet_center = 0.5; // y0
+    double jet_width = 0.2;  // w
 };
 
 void apply_bc_u(const Grid&, Field2D<double>&, const BC&);

@@ -13,6 +13,11 @@ TimeIntegrator::TimeIntegrator(const Grid &grid) : g(grid) {
 double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
                             PressureSolver &pressure, const PressureParams &pp,
                             double &pressure_residual, double dt_override) {
+    // Enforce BCs before computing timestep
+    apply_bc_u(g, s.u, bc);
+    apply_bc_v(g, s.v, bc);
+    apply_bc_p(g, s.p, bc);
+
     double dt = dt_override > 0.0 ? dt_override
                                   : compute_cfl(g, s.u, s.v, Re, CFL);
 
@@ -92,6 +97,7 @@ double TimeIntegrator::step(State &s, const BC &bc, double Re, double CFL,
         }
     }
 
+    apply_bc_p(g, s.p, bc);
     pressure_residual = pressure.solve(s.p, s.rhs, pp);
     apply_bc_p(g, s.p, bc);
     subtract_grad_p(g, s.u, s.v, s.p, dt);

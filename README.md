@@ -78,6 +78,19 @@ The application supports various command-line options:
 
 Simulation results are saved in the `out/` directory in VTK format for post-processing with tools like ParaView.
 
+## Jet Inflow
+
+The default startup scenario is a jet issuing from the left boundary into a
+2×1 domain. The jet speed, slot center, and width can be adjusted at runtime in
+the GUI under *Boundary Conditions*. Typical parameters:
+
+- `U_in`: 1.0
+- `y0`: 0.5 (slot center)
+- `width`: 0.2
+
+In headless mode the same defaults apply. After running, a plume develops and
+vorticity can be visualized by switching the field view.
+
 ## Troubleshooting
 
 If you encounter build issues:
