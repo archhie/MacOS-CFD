@@ -20,6 +20,10 @@ struct BC {
     // Jet inflow parameters (used on left when type==Inflow)
     double jet_center = 0.5; // y0
     double jet_width = 0.2;  // w
+    double jet_thickness = 0.02; // smoothing thickness delta
+    double jet_eps = 0.03;       // perturbation amplitude
+    int jet_k = 8;               // perturbation wavenumber
+    double jet_phase = 0.0;      // perturbation phase
 };
 
 void apply_bc_u(const Grid&, Field2D<double>&, const BC&);

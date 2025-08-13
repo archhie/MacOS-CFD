@@ -3,17 +3,27 @@
 #include <algorithm>
 #include <cmath>
 
-// Helper to check jet slot membership
-static inline bool jet_slot(const Grid &g, const BC &bc, double y) {
-    if (bc.left.type != BCType::Inflow)
-        return false;
-    if (bc.jet_width >= g.Ly)
-        return true;
-    return std::fabs(y - bc.jet_center) <= 0.5 * bc.jet_width;
+// Smooth top-hat mask for jet inflow (0 outside, ~1 inside)
+static inline double jet_mask(const Grid &g, const BC &bc, double y) {
+    double delta = bc.jet_thickness;
+    double y0 = bc.jet_center;
+    double w = bc.jet_width;
+    double a = (y - (y0 - 0.5 * w)) / delta;
+    double b = (y - (y0 + 0.5 * w)) / delta;
+    return 0.5 * (std::tanh(a) - std::tanh(b));
+}
+
+static inline double jet_velocity(const Grid &g, const BC &bc, double y) {
+    double base = bc.left.inflow_u * jet_mask(g, bc, y);
+    const double pi = 3.14159265358979323846;
+    double pert = bc.jet_eps * bc.left.inflow_u *
+                  std::sin(2.0 * pi * bc.jet_k * (y / g.Ly) + bc.jet_phase);
+    return base + pert;
 }
 
 void apply_bc_u(const Grid &g, Field2D<double> &u, const BC &bc) {
     int nx = g.nx;
+    int ny = g.ny;
     int ngx = g.ngx;
     int ngy = g.ngy;
 
@@ -34,10 +44,9 @@ void apply_bc_u(const Grid &g, Field2D<double> &u, const BC &bc) {
                 u.at_raw(ngx - 1, jj) = 0.0;
                 break;
             case BCType::Inflow: {
-                bool slot = jet_slot(g, bc, y);
-                double val = slot ? bc.left.inflow_u : 0.0;
+                double val = jet_velocity(g, bc, y);
                 u.at_raw(ngx, jj) = val;
-                u.at_raw(ngx - 1, jj) = val;
+                u.at_raw(ngx - 1, jj) = val; // mirror ghost
                 break;
             }
             case BCType::Outflow: {
@@ -190,7 +199,7 @@ void apply_bc_v(const Grid &g, Field2D<double> &v, const BC &bc) {
         }
         case BCType::Inflow: {
             double y = j * g.dy;
-            double val = jet_slot(g, bc, y) ? bc.left.inflow_v : 0.0;
+            double val = bc.left.inflow_v * jet_mask(g, bc, y);
             v.at_raw(ngx, jj) = val;
             v.at_raw(ngx - 1, jj) = val;
             break;

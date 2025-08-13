@@ -11,15 +11,20 @@
 
 class Gui {
   public:
-    enum class Field { U, V, Speed, Pressure };
+    enum class Field { U, V, Speed, Pressure, Vorticity };
+
+    enum class Preset { JetPlume, LidDrivenCavity, PeriodicShear };
 
     double Re = 1000.0;
     double CFL = 0.5;
     double dt = 0.001;  // dt override
     bool running = true;
     bool step = false;
-    bool reset = false;
+    bool reset = false;          // generic reset
+    bool apply_preset = false;   // trigger to apply chosen preset
+    bool reset_run = false;      // reset fields and start running
     Field field = Field::Speed;
+    int preset = static_cast<int>(Preset::JetPlume);
     BC bc;             // boundary condition settings
     double Ly = 1.0;   // domain height for jet sliders
 
