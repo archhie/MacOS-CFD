@@ -10,6 +10,18 @@
 #include "solver/grid.hpp"
 #include "solver/state.hpp"
 
+// Shape structure for object drawer
+struct Shape {
+    int type; // 0 = rectangle, 1 = circle
+    ImVec2 pos;
+    ImVec2 size;
+    int bcType; // 0 = wall, 1 = porous
+    bool visible;
+    bool enabled;
+    
+    Shape() : type(0), pos(0.0f, 0.0f), size(10.0f, 10.0f), bcType(0), visible(true), enabled(true) {}
+};
+
 class Gui {
   public:
     enum class Field { 
@@ -21,7 +33,7 @@ class Gui {
         Viridis, Plasma, Jet, Grayscale, Turbo, RdYlBu, RdBu, Coolwarm
     };
 
-    enum class Preset { JetPlume, LidDrivenCavity, PeriodicShear };
+    enum class Preset { JetPlume, LidDrivenCavity, PeriodicShear, FastWind };
 
     // CFD Parameters
     double Re = 50.0;
@@ -56,6 +68,7 @@ class Gui {
     bool show_controls = true;
     bool show_viz = true;
     bool show_bc = true;
+    bool show_object_drawer = true;
     bool layout_initialized = false;
     bool reset_layout = false;
     
@@ -88,6 +101,18 @@ class Gui {
     // Current tab for legacy support
     int current_tab = 0;
 
+    // Object Drawer functionality
+    std::vector<Shape> shapes;
+    int selected_shape = -1;
+    bool mouse_picking_mode = false;
+    ImVec2 grid_size = ImVec2(512.0f, 256.0f); // Will be updated from actual grid
+    
+    // Current shape creation parameters (for mouse picking)
+    int current_shape_type = 0;
+    int current_bc_type = 0;
+    ImVec2 current_pos = ImVec2(0.0f, 0.0f);
+    ImVec2 current_size = ImVec2(10.0f, 10.0f);
+
     bool init(GLFWwindow *window);
     void begin_frame();
     void draw(int timestep, double sim_time, double dt, double max_velocity,
@@ -107,9 +132,17 @@ class Gui {
                                 double max_velocity, double div_l2, double pressure_residual);
     void draw_visualization_panel(GLuint texture);
     void draw_boundary_conditions_panel();
+    void draw_object_drawer_panel();
     void draw_performance_stats();
     void draw_field_stats();
     void draw_preset_preview();
+    
+    // Object drawer functions
+    void add_shape(int type, ImVec2 pos, ImVec2 size, int bcType);
+    void remove_shape(int index);
+    void clear_shapes();
+    void apply_shapes_to_simulation(const Grid& grid, State& state);
+    ImVec2 screen_to_grid_coords(ImVec2 screen_pos, ImVec2 viewport_pos, ImVec2 viewport_size);
     
     // Utility functions
     std::string get_field_name(Field field) const;
@@ -126,3 +159,6 @@ void update_field_texture(const Grid &g, const State &s, Gui::Field field,
                           Gui::Colormap colormap = Gui::Colormap::Viridis,
                           float scale_min = 0.0f, float scale_max = 1.0f,
                           bool normalize = false, float gamma = 1.0f);
+
+// Function to apply shapes to velocity field
+void apply_shape_boundary_conditions(const Grid& grid, State& state, const std::vector<Shape>& shapes);

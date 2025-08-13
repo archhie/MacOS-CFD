@@ -18,6 +18,7 @@
 #include "solver/state.hpp"
 #include "solver/time_integrator.hpp"
 #include "solver/advection.hpp"
+#include "shapes.hpp"
 
 static void save_vtk(const Grid &g, const State &s, const std::string &path) {
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
@@ -177,6 +178,7 @@ int main(int argc, char **argv) {
     gui.init(window);
     gui.bc = bc;
     gui.Ly = grid.Ly;
+    gui.grid_size = ImVec2(static_cast<float>(grid.nx), static_cast<float>(grid.ny));
 
     GLuint tex = 0;
     glGenTextures(1, &tex);
@@ -240,6 +242,9 @@ int main(int argc, char **argv) {
             sim_time += last_dt;
             step++;
             
+            // Apply shapes to simulation (after advection/projection)
+            gui.apply_shapes_to_simulation(grid, state);
+            
             // Only step once if step button pressed
             if (gui.step) {
                 gui.step = false;
@@ -296,6 +301,16 @@ int main(int argc, char **argv) {
                 bc.top.type = BCType::Wall;
                 gui.Re = 1000.0;
                 gui.CFL = 0.1;  // More conservative for stability
+                break;
+            case Gui::Preset::FastWind:
+                bc.left.type = BCType::Inflow;
+                bc.right.type = BCType::Outflow;
+                bc.top.type = BCType::Wall;
+                bc.bottom.type = BCType::Wall;
+                gui.Re = 1000.0;
+                gui.CFL = 0.01;
+                bc.left.inflow_u = 5.0;
+                bc.left.inflow_v = 0.0;
                 break;
             }
             gui.apply_preset = false;

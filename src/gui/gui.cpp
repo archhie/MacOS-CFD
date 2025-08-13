@@ -164,6 +164,10 @@ void Gui::draw(int timestep, double sim_time, double dt, double max_velocity,
         draw_boundary_conditions_panel();
     }
     
+    if (show_object_drawer) {
+        draw_object_drawer_panel();
+    }
+    
     // Draw the simulation viewport (background) - must be after DockSpace
     draw_simulation_viewport(timestep, sim_time, dt, max_velocity, div_l2, pressure_residual, texture);
     
@@ -199,6 +203,13 @@ void Gui::draw_main_menu_bar() {
         
         // Boundary Conditions toggle
         if (ImGui::MenuItem("Boundary Conditions", nullptr, &show_bc)) {
+            // Toggle handled by the bool
+        }
+        
+        ImGui::SameLine();
+        
+        // Object Drawer toggle
+        if (ImGui::MenuItem("Object Drawer", nullptr, &show_object_drawer)) {
             // Toggle handled by the bool
         }
         
@@ -253,6 +264,571 @@ void Gui::draw_simulation_viewport(int timestep, double sim_time, double dt,
         
         // Draw the simulation texture
         ImGui::Image((void*)(intptr_t)texture, content_size);
+        
+        // Mouse picking for shape positioning
+        if (mouse_picking_mode && ImGui::IsWindowHovered()) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                ImVec2 mouse_pos = ImGui::GetMousePos();
+                ImVec2 window_pos = ImGui::GetWindowPos();
+                ImVec2 window_size = ImGui::GetWindowSize();
+                
+                // Convert screen coordinates to grid coordinates
+                ImVec2 grid_pos = screen_to_grid_coords(mouse_pos, window_pos, window_size);
+                
+                // Update the current position for shape creation
+                current_pos = grid_pos;
+            }
+            
+            // Draw picking cursor
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
+            ImVec2 mouse_pos = ImGui::GetMousePos();
+            float cursor_size = 10.0f;
+            ImVec4 cursor_color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+            
+            draw_list->AddCircle(mouse_pos, cursor_size, ImGui::ColorConvertFloat4ToU32(cursor_color), 0, 2.0f);
+            draw_list->AddLine(
+                ImVec2(mouse_pos.x - cursor_size, mouse_pos.y),
+                ImVec2(mouse_pos.x + cursor_size, mouse_pos.y),
+                ImGui::ColorConvertFloat4ToU32(cursor_color), 2.0f
+            );
+            draw_list->AddLine(
+                ImVec2(mouse_pos.x, mouse_pos.y - cursor_size),
+                ImVec2(mouse_pos.x, mouse_pos.y + cursor_size),
+                ImGui::ColorConvertFloat4ToU32(cursor_color), 2.0f
+            );
+        }
+        
+        // Helper: place a small overlay at a chosen corner within the simulation window
+        enum class OverlayCorner { TopLeft, TopRight, BottomLeft, BottomRight };
+
+        auto BeginOverlay = [&](const char* name, OverlayCorner corner, ImVec2 padding = ImVec2(8,6), float alpha = 0.9f)
+        {
+            ImVec2 pos = sim_pos;
+            switch (corner) {
+              case OverlayCorner::TopLeft:     pos = ImVec2(sim_pos.x + margin,                      sim_pos.y + margin + menu_bar_height); break;
+              case OverlayCorner::TopRight:    pos = ImVec2(sim_pos.x + sim_size.x - margin,        sim_pos.y + margin + menu_bar_height); break;
+              case OverlayCorner::BottomLeft:  pos = ImVec2(sim_pos.x + margin,                      sim_pos.y + sim_size.y - margin); break;
+              case OverlayCorner::BottomRight: pos = ImVec2(sim_pos.x + sim_size.x - margin,        sim_pos.y + sim_size.y - margin); break;
+            }
+            // We'll right/left align later after we know window size (for right/bottom corners)
+            ImGui::SetNextWindowBgAlpha(alpha);
+            ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+            ImGui::Begin(name,
+                nullptr,
+                ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoFocusOnAppearing |
+                ImGuiWindowFlags_NoNav |
+                ImGuiWindowFlags_NoMove);
+        };
+
+        auto EndOverlay = [&](OverlayCorner corner)
+        {
+            // If right/bottom corner, shift by window size to keep inside simulation window
+            ImVec2 win_size = ImGui::GetWindowSize();
+            ImVec2 pos = ImGui::GetWindowPos();
+            if (corner == OverlayCorner::TopRight)
+                ImGui::SetWindowPos(ImVec2(pos.x - win_size.x, pos.y), ImGuiCond_Always);
+            else if (corner == OverlayCorner::BottomLeft)
+                ImGui::SetWindowPos(ImVec2(pos.x, pos.y - win_size.y), ImGuiCond_Always);
+            else if (corner == OverlayCorner::BottomRight)
+                ImGui::SetWindowPos(ImVec2(pos.x - win_size.x, pos.y - win_size.y), ImGuiCond_Always);
+
+            ImGui::End();
+            ImGui::PopStyleVar();
+        };
+
+        // HUD overlay in top-left corner
+        BeginOverlay("##hud", OverlayCorner::TopLeft);
+        
+        // Play/Pause button (using plain text instead of Unicode)
+        if (ImGui::Button(running ? "Pause" : "Play", ImVec2(40, 25))) {
+            running = !running;
+        }
+        
+        ImGui::SameLine();
+        
+        // Step button (using plain text instead of Unicode)
+        if (ImGui::Button("Step", ImVec2(40, 25))) {
+            step = true;
+        }
+        
+        ImGui::SameLine();
+        
+        // Reset button (using plain text instead of Unicode)
+        if (ImGui::Button("Reset", ImVec2(40, 25))) {
+            reset = true;
+        }
+        
+        ImGui::Spacing();
+        
+        // Field and stats info
+        ImGui::TextUnformatted(get_field_name(field).c_str());
+        ImGui::Text("FPS: %.1f | Step: %d", fps, timestep);
+        ImGui::Text("Time: %.3f", sim_time);
+        
+        EndOverlay(OverlayCorner::TopLeft);
+
+        // Field statistics overlay in bottom-right corner
+        BeginOverlay("##field_stats", OverlayCorner::BottomRight);
+        ImGui::Text("Min: %.3g\nMax: %.3g\nMean: %.3g", field_min, field_max, field_mean);
+        EndOverlay(OverlayCorner::BottomRight);
+
+        // Colorbar overlay on the right side
+        BeginOverlay("##colorbar", OverlayCorner::TopRight, ImVec2(4, 8), 0.8f);
+        
+        // Simple colorbar implementation
+        ImVec2 colorbar_size(20, 200);
+        ImGui::BeginChild("##colorbar_content", colorbar_size, true);
+        
+        // Draw colorbar gradient
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        ImVec2 min_pos = ImGui::GetWindowPos();
+        ImVec2 max_pos = ImVec2(min_pos.x + colorbar_size.x, min_pos.y + colorbar_size.y);
+        
+        // Create a simple gradient from the colormap colors
+        // For now, use a simple viridis-like gradient
+        for (int i = 0; i < colorbar_size.y; i++) {
+            float t = 1.0f - (float)i / colorbar_size.y; // Invert so max is at top
+            ImVec4 color;
+            
+            // Simple viridis-like gradient
+            if (t < 0.25f) {
+                float s = t / 0.25f;
+                color = ImVec4(0.0f, 0.0f, 0.5f + 0.5f * s, 1.0f);
+            } else if (t < 0.5f) {
+                float s = (t - 0.25f) / 0.25f;
+                color = ImVec4(0.0f, s, 1.0f, 1.0f);
+            } else if (t < 0.75f) {
+                float s = (t - 0.5f) / 0.25f;
+                color = ImVec4(s, 1.0f, 1.0f - s, 1.0f);
+            } else {
+                float s = (t - 0.75f) / 0.25f;
+                color = ImVec4(1.0f, 1.0f - 0.5f * s, 0.0f, 1.0f);
+            }
+            
+            ImVec2 line_start(min_pos.x, min_pos.y + i);
+            ImVec2 line_end(min_pos.x + colorbar_size.x, min_pos.y + i);
+            draw_list->AddLine(line_start, line_end, ImGui::ColorConvertFloat4ToU32(color));
+        }
+        
+        // Add border
+        draw_list->AddRect(min_pos, max_pos, ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.5f)));
+        
+        // Add scale labels
+        ImGui::SetCursorPos(ImVec2(colorbar_size.x + 5, 0));
+        ImGui::Text("%.2g", field_max);
+        ImGui::SetCursorPos(ImVec2(colorbar_size.x + 5, colorbar_size.y - 15));
+        ImGui::Text("%.2g", field_min);
+        
+        ImGui::EndChild();
+        EndOverlay(OverlayCorner::TopRight);
+    }
+    
+    ImGui::PopStyleVar();
+    ImGui::End();
+}
+
+void Gui::draw_cfd_controls_panel(int timestep, double sim_time, double dt, 
+                                 double max_velocity, double div_l2, double pressure_residual) {
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420, 420), ImVec2(FLT_MAX, FLT_MAX));
+    
+    if (ImGui::Begin("CFD Controls", &show_controls, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::BeginChild("##scroll", ImGui::GetContentRegionAvail(), true, 
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        
+        // Flow Parameters Section
+        if (ImGui::CollapsingHeader("Flow Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
+            
+            float re_float = static_cast<float>(Re);
+            if (ImGui::SliderFloat("Reynolds Number (Re)", &re_float, 10.0f, 1000.0f, "%.1f")) {
+                Re = static_cast<double>(re_float);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Reynolds number controls the relative importance of inertial vs viscous forces");
+            }
+            
+            float cfl_float = static_cast<float>(CFL);
+            if (ImGui::SliderFloat("CFL Number", &cfl_float, 0.001f, 0.5f, "%.3f")) {
+                CFL = static_cast<double>(cfl_float);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Courant-Friedrichs-Lewy number controls numerical stability");
+            }
+            
+            ImGui::PopItemWidth();
+        }
+        
+        // Timestep Control Section
+        if (ImGui::CollapsingHeader("Timestep Control", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
+            
+            float dt_float = static_cast<float>(this->dt);
+            if (ImGui::SliderFloat("dt Override", &dt_float, 0.0001f, 0.01f, "%.4f")) {
+                this->dt = static_cast<double>(dt_float);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Override automatic timestep calculation with fixed value");
+            }
+            
+            ImGui::PopItemWidth();
+        }
+        
+        // Simulation Speed Section
+        if (ImGui::CollapsingHeader("Simulation Speed", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
+            
+            float speed_float = static_cast<float>(sim_speed);
+            if (ImGui::SliderFloat("Speed Multiplier", &speed_float, 0.1f, 5.0f, "%.1fx")) {
+                sim_speed = static_cast<double>(speed_float);
+            }
+            
+            ImGui::PopItemWidth();
+            
+            ImGui::Spacing();
+            
+            // Control buttons
+            if (ImGui::Button("Play/Pause", ImVec2(-FLT_MIN, 0))) {
+                running = !running;
+            }
+            
+            if (ImGui::Button("Step", ImVec2(-FLT_MIN, 0))) {
+                step = true;
+            }
+            
+            if (ImGui::Button("Reset", ImVec2(-FLT_MIN, 0))) {
+                reset = true;
+            }
+            
+            if (ImGui::Button("Reset & Run", ImVec2(-FLT_MIN, 0))) {
+                reset_run = true;
+            }
+        }
+        
+        // Simulation Info Section
+        if (ImGui::CollapsingHeader("Simulation Info", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Timestep: %d", timestep);
+            ImGui::Text("Time: %.6f", sim_time);
+            ImGui::Text("dt: %.6f", dt);
+            ImGui::Text("Max velocity: %.6f", max_velocity);
+            ImGui::Text("Divergence L2: %.2e", div_l2);
+            ImGui::Text("Pressure residual: %.2e", pressure_residual);
+            ImGui::Text("Inflow U=%.3f w=%.3f", bc.left.inflow_u, bc.jet_width);
+            
+            if (inflow_inactive) {
+                ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "Inflow inactive");
+            }
+            
+            ImGui::Separator();
+            
+            // Performance stats
+            ImGui::Text("FPS: %.1f", fps);
+#include "gui.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <sstream>
+#include <iomanip>
+#include <filesystem>
+
+#include "../viz.hpp"
+#include "../colormaps.hpp"
+
+#include "backends/imgui_impl_glfw.h"
+#include "backends/imgui_impl_opengl3.h"
+#include "imgui_internal.h"  // For docking functions
+
+bool Gui::init(GLFWwindow *window) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    
+    // Enable docking and viewports
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.FontAllowUserScaling = true;
+    io.IniFilename = "imgui.ini"; // persist layout
+    
+    // Get UI scale for retina displays
+    float x_scale, y_scale;
+    glfwGetWindowContentScale(window, &x_scale, &y_scale);
+    ui_scale = std::max(1.0f, x_scale);
+    
+    // Setup modern dark theme
+    setup_modern_style();
+    
+    // Load fonts
+    load_fonts();
+    
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 330");
+    
+    // Load saved UI state
+    load_ui_state();
+    
+    return true;
+}
+
+void Gui::setup_modern_style() {
+    ImGui::StyleColorsDark();
+    
+    ImGuiStyle& style = ImGui::GetStyle();
+    
+    // Apply UI scaling
+    style.ScaleAllSizes(ui_scale);
+    
+    // Modern rounded corners and spacing
+    style.WindowRounding = 6.0f;
+    style.ChildRounding = 4.0f;
+    style.FrameRounding = 4.0f;
+    style.GrabRounding = 4.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.TabRounding = 4.0f;
+    
+    // Improved spacing
+    style.WindowPadding = ImVec2(12, 10);
+    style.FramePadding = ImVec2(8, 6);
+    style.ItemSpacing = ImVec2(8, 6);
+    style.ItemInnerSpacing = ImVec2(6, 4);
+    style.ScrollbarSize = 12.0f;
+    style.GrabMinSize = 8.0f;
+    
+    // Modern colors with better contrast
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.95f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.06f, 0.06f, 0.08f, 0.95f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.10f, 0.10f, 0.12f, 0.95f);
+    colors[ImGuiCol_Border] = ImVec4(0.20f, 0.20f, 0.25f, 0.50f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.15f, 0.95f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.15f, 0.15f, 0.18f, 0.95f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.18f, 0.18f, 0.22f, 0.95f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.10f, 0.10f, 0.12f, 0.95f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.12f, 0.12f, 0.15f, 0.95f);
+    colors[ImGuiCol_Button] = ImVec4(0.15f, 0.15f, 0.18f, 0.95f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.20f, 0.25f, 0.95f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.25f, 0.25f, 0.30f, 0.95f);
+    colors[ImGuiCol_Header] = ImVec4(0.12f, 0.12f, 0.15f, 0.95f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.15f, 0.15f, 0.18f, 0.95f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.18f, 0.18f, 0.22f, 0.95f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.30f, 0.60f, 0.90f, 0.95f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.40f, 0.70f, 1.00f, 0.95f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.30f, 0.60f, 0.90f, 0.95f);
+    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.30f, 0.60f, 0.90f, 0.35f);
+    
+    // Black menu bar for the top toolbar
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.02f, 0.02f, 0.02f, 0.95f);
+    
+    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+}
+
+void Gui::begin_frame() {
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+
+void Gui::draw(int timestep, double sim_time, double dt, double max_velocity,
+               double div_l2, double pressure_residual, GLuint texture) {
+    
+    // Update performance stats
+    double current_time = ImGui::GetTime();
+    if (last_frame_time > 0.0) {
+        fps = 1.0 / (current_time - last_frame_time);
+    }
+    last_frame_time = current_time;
+    
+    // Fill the main viewport with DockSpace
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize(vp->Size);
+    ImGui::SetNextWindowViewport(vp->ID);
+    ImGuiWindowFlags dockspace_flags =
+        ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus |
+        ImGuiWindowFlags_NoBackground; // we render our own bg (simulation)
+    
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0,0));
+    ImGui::Begin("###DockSpaceHost", nullptr, dockspace_flags);
+    ImGui::PopStyleVar(2);
+
+    // Central node passthrough so input reaches simulation when nothing overlies it
+    ImGuiDockNodeFlags ds_flags = ImGuiDockNodeFlags_PassthruCentralNode;
+    ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0,0), ds_flags);
+
+    // Top toolbar (menu bar look, black)
+    draw_main_menu_bar();
+    
+    ImGui::End(); // DockSpace host
+    
+    // Draw dockable panels
+    if (show_controls) {
+        draw_cfd_controls_panel(timestep, sim_time, dt, max_velocity, div_l2, pressure_residual);
+    }
+    
+    if (show_viz) {
+        draw_visualization_panel(texture);
+    }
+    
+    if (show_bc) {
+        draw_boundary_conditions_panel();
+    }
+    
+    if (show_object_drawer) {
+        draw_object_drawer_panel();
+    }
+    
+    // Draw the simulation viewport (background) - must be after DockSpace
+    draw_simulation_viewport(timestep, sim_time, dt, max_velocity, div_l2, pressure_residual, texture);
+    
+    // Handle layout reset
+    if (reset_layout) {
+        reset_dock_layout(dockspace_id);
+        layout_initialized = false;
+        reset_layout = false;
+    }
+    
+    // Initialize layout on first run
+    if (!layout_initialized) {
+        reset_dock_layout(dockspace_id);
+        layout_initialized = true;
+    }
+}
+
+void Gui::draw_main_menu_bar() {
+    if (ImGui::BeginMainMenuBar()) {
+        // CFD Controls toggle
+        if (ImGui::MenuItem("CFD Controls", nullptr, &show_controls)) {
+            // Toggle handled by the bool
+        }
+        
+        ImGui::SameLine();
+        
+        // Visualization toggle
+        if (ImGui::MenuItem("Visualization", nullptr, &show_viz)) {
+            // Toggle handled by the bool
+        }
+        
+        ImGui::SameLine();
+        
+        // Boundary Conditions toggle
+        if (ImGui::MenuItem("Boundary Conditions", nullptr, &show_bc)) {
+            // Toggle handled by the bool
+        }
+        
+        ImGui::SameLine();
+        
+        // Object Drawer toggle
+        if (ImGui::MenuItem("Object Drawer", nullptr, &show_object_drawer)) {
+            // Toggle handled by the bool
+        }
+        
+        ImGui::Separator();
+        
+        // Reset Layout button
+        if (ImGui::MenuItem("Reset Layout")) {
+            reset_layout = true;
+        }
+        
+        ImGui::EndMainMenuBar();
+    }
+}
+
+void Gui::draw_simulation_viewport(int timestep, double sim_time, double dt, 
+                                 double max_velocity, double div_l2, double pressure_residual,
+                                 GLuint texture) {
+    // Suppress unused parameter warnings
+    (void)dt;
+    (void)max_velocity;
+    (void)div_l2;
+    (void)pressure_residual;
+    
+    // Create the simulation viewport window
+    ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
+    
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | 
+                                   ImGuiWindowFlags_NoCollapse |
+                                   ImGuiWindowFlags_NoScrollbar | 
+                                   ImGuiWindowFlags_NoScrollWithMouse |
+                                   ImGuiWindowFlags_NoBringToFrontOnFocus | 
+                                   ImGuiWindowFlags_NoNavFocus |
+                                   ImGuiWindowFlags_NoMove;
+    
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    
+    if (ImGui::Begin("Simulation Viewport", nullptr, window_flags)) {
+        // Get the simulation window position and size for proper overlay positioning
+        ImVec2 sim_pos  = ImGui::GetWindowPos();
+        ImVec2 sim_size = ImGui::GetWindowSize();
+        const float margin = 10.0f;
+        
+        // Get menu bar height to avoid overlapping with the top black bar
+        float menu_bar_height = ImGui::GetFrameHeight();
+        
+        // Get the content region for the simulation
+        ImVec2 content_size = ImGui::GetContentRegionAvail();
+        
+        // Set OpenGL viewport to match the content region
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        glViewport(pos.x, pos.y, content_size.x, content_size.y);
+        
+        // Draw the simulation texture
+        ImGui::Image((void*)(intptr_t)texture, content_size);
+        
+        // Mouse picking for shape positioning
+        if (mouse_picking_mode && ImGui::IsWindowHovered()) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                ImVec2 mouse_pos = ImGui::GetMousePos();
+                ImVec2 window_pos = ImGui::GetWindowPos();
+                ImVec2 window_size = ImGui::GetWindowSize();
+                
+                // Convert screen coordinates to grid coordinates
+                ImVec2 grid_pos = screen_to_grid_coords(mouse_pos, window_pos, window_size);
+                
+                // Update the position in the object drawer
+                // We'll need to access the static variables from the object drawer
+                // For now, we'll just store this in a member variable and update it in the object drawer
+                if (selected_shape >= 0 && selected_shape < static_cast<int>(shapes.size())) {
+                    shapes[selected_shape].pos = grid_pos;
+                }
+            }
+            
+            // Draw picking cursor
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
+            ImVec2 mouse_pos = ImGui::GetMousePos();
+            float cursor_size = 10.0f;
+            ImVec4 cursor_color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+            
+            draw_list->AddCircle(mouse_pos, cursor_size, ImGui::ColorConvertFloat4ToU32(cursor_color), 0, 2.0f);
+            draw_list->AddLine(
+                ImVec2(mouse_pos.x - cursor_size, mouse_pos.y),
+                ImVec2(mouse_pos.x + cursor_size, mouse_pos.y),
+                ImGui::ColorConvertFloat4ToU32(cursor_color), 2.0f
+            );
+            draw_list->AddLine(
+                ImVec2(mouse_pos.x, mouse_pos.y - cursor_size),
+                ImVec2(mouse_pos.x, mouse_pos.y + cursor_size),
+                ImGui::ColorConvertFloat4ToU32(cursor_color), 2.0f
+            );
+        }
         
         // Helper: place a small overlay at a chosen corner within the simulation window
         enum class OverlayCorner { TopLeft, TopRight, BottomLeft, BottomRight };
@@ -578,8 +1154,8 @@ void Gui::draw_boundary_conditions_panel() {
         ImGui::Text("Preset Configurations");
         ImGui::PushItemWidth(-50.0f);  // Leave 50px margin for text labels
         
-        const char* preset_names[] = {"Jet Plume", "Lid-Driven Cavity", "Periodic Shear"};
-        if (ImGui::Combo("Preset", &preset, preset_names, 3)) {
+        const char* preset_names[] = {"Jet Plume", "Lid-Driven Cavity", "Periodic Shear", "Fast Wind (Left to Right)"};
+        if (ImGui::Combo("Preset", &preset, preset_names, 4)) {
             // Preset selection changed
         }
         
@@ -1074,4 +1650,152 @@ void Gui::save_ui_state() {
 void Gui::load_ui_state() {
     // TODO: Implement JSON-based UI state loading
     // This would restore the saved UI state
+}
+
+void Gui::draw_object_drawer_panel() {
+    ImGui::SetNextWindowSizeConstraints(ImVec2(350, 400), ImVec2(FLT_MAX, FLT_MAX));
+    
+    if (ImGui::Begin("Object Drawer", &show_object_drawer, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::BeginChild("##scroll", ImGui::GetContentRegionAvail(), true, 
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        
+        // Shape creation controls
+        if (ImGui::CollapsingHeader("Add New Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Combo("Shape Type", &current_shape_type, "Rectangle\0Circle\0");
+            ImGui::Combo("Boundary Type", &current_bc_type, "Solid Wall\0Porous\0");
+            
+            ImGui::SliderFloat2("Position", (float*)&current_pos, 0.0f, std::max(grid_size.x, grid_size.y));
+            if (current_shape_type == 0) { // Rectangle
+                ImGui::SliderFloat2("Size (Width/Height)", (float*)&current_size, 1.0f, std::max(grid_size.x, grid_size.y) / 2);
+            } else { // Circle
+                ImGui::SliderFloat("Radius", &current_size.x, 1.0f, std::max(grid_size.x, grid_size.y) / 4);
+                current_size.y = current_size.x; // Keep circle radius consistent
+            }
+            
+            if (ImGui::Button("Add Shape", ImVec2(-FLT_MIN, 0))) {
+                add_shape(current_shape_type, current_pos, current_size, current_bc_type);
+            }
+            
+            ImGui::Spacing();
+            
+            // Mouse picking mode
+            if (ImGui::Button(mouse_picking_mode ? "Exit Pick Mode" : "Pick Position", ImVec2(-FLT_MIN, 0))) {
+                mouse_picking_mode = !mouse_picking_mode;
+            }
+            
+            if (mouse_picking_mode) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Click in simulation area to set position");
+            }
+        }
+        
+        ImGui::Spacing();
+        
+        // Shape list
+        if (ImGui::CollapsingHeader("Shapes", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (shapes.empty()) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No shapes added yet");
+            } else {
+                for (int i = 0; i < static_cast<int>(shapes.size()); ++i) {
+                    auto& shape = shapes[i];
+                    
+                    ImGui::PushID(i);
+                    
+                    bool is_selected = (selected_shape == i);
+                    if (ImGui::Selectable(("Shape " + std::to_string(i + 1)).c_str(), is_selected)) {
+                        selected_shape = i;
+                    }
+                    
+                    if (is_selected) {
+                        ImGui::SameLine();
+                        if (ImGui::Button("Remove")) {
+                            remove_shape(i);
+                            ImGui::PopID();
+                            break;
+                        }
+                        
+                        ImGui::Spacing();
+                        
+                        // Shape properties
+                        const char* shape_names[] = {"Rectangle", "Circle"};
+                        const char* bc_names[] = {"Solid Wall", "Porous"};
+                        
+                        int type = shape.type;
+                        if (ImGui::Combo("Type", &type, shape_names, 2)) {
+                            shape.type = type;
+                        }
+                        
+                        int bc = shape.bcType;
+                        if (ImGui::Combo("Boundary", &bc, bc_names, 2)) {
+                            shape.bcType = bc;
+                        }
+                        
+                        ImGui::SliderFloat2("Position", (float*)&shape.pos, 0.0f, std::max(grid_size.x, grid_size.y));
+                        
+                        if (shape.type == 0) { // Rectangle
+                            ImGui::SliderFloat2("Size", (float*)&shape.size, 1.0f, std::max(grid_size.x, grid_size.y) / 2);
+                        } else { // Circle
+                            ImGui::SliderFloat("Radius", &shape.size.x, 1.0f, std::max(grid_size.x, grid_size.y) / 4);
+                            shape.size.y = shape.size.x;
+                        }
+                        
+                        ImGui::Checkbox("Visible", &shape.visible);
+                        ImGui::Checkbox("Enabled", &shape.enabled);
+                    }
+                    
+                    ImGui::PopID();
+                }
+                
+                ImGui::Spacing();
+                if (ImGui::Button("Clear All Shapes", ImVec2(-FLT_MIN, 0))) {
+                    clear_shapes();
+                }
+            }
+        }
+        
+        ImGui::EndChild();
+    }
+    ImGui::End();
+}
+
+void Gui::add_shape(int type, ImVec2 pos, ImVec2 size, int bcType) {
+    Shape shape;
+    shape.type = type;
+    shape.pos = pos;
+    shape.size = size;
+    shape.bcType = bcType;
+    shape.visible = true;
+    shape.enabled = true;
+    
+    shapes.push_back(shape);
+    selected_shape = static_cast<int>(shapes.size()) - 1;
+}
+
+void Gui::remove_shape(int index) {
+    if (index >= 0 && index < static_cast<int>(shapes.size())) {
+        shapes.erase(shapes.begin() + index);
+        if (selected_shape >= static_cast<int>(shapes.size())) {
+            selected_shape = static_cast<int>(shapes.size()) - 1;
+        }
+    }
+}
+
+void Gui::clear_shapes() {
+    shapes.clear();
+    selected_shape = -1;
+}
+
+void Gui::apply_shapes_to_simulation(const Grid& grid, State& state) {
+    apply_shape_boundary_conditions(grid, state, shapes);
+}
+
+ImVec2 Gui::screen_to_grid_coords(ImVec2 screen_pos, ImVec2 viewport_pos, ImVec2 viewport_size) {
+    ImVec2 normalized = ImVec2(
+        (screen_pos.x - viewport_pos.x) / viewport_size.x,
+        (screen_pos.y - viewport_pos.y) / viewport_size.y
+    );
+    
+    return ImVec2(
+        normalized.x * grid_size.x,
+        normalized.y * grid_size.y
+    );
 } 
