@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <cstring>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <OpenGL/gl3.h>
@@ -77,6 +78,7 @@ int main() {
     state.rhs.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
     state.tmp.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
     state.scalar.allocate(grid.nx, grid.ny, grid.p_pitch(), grid.ngx, grid.ngy);
+
     printf("Grid: %d x %d (dx=%g, dy=%g)\n", grid.nx, grid.ny, grid.dx, grid.dy);
 
     float verts[] = {
@@ -99,6 +101,17 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, 1);
+
+        std::memset(du_dt.data, 0, sizeof(double) * du_dt.pitch * (du_dt.ny + 2 * du_dt.ngy));
+        std::memset(dv_dt.data, 0, sizeof(double) * dv_dt.pitch * (dv_dt.ny + 2 * dv_dt.ngy));
+        advect_u(grid, state.u, state.v, du_dt);
+        diffuse_u(grid, state.u, du_dt, 1.0 / Re);
+        advect_v(grid, state.u, state.v, dv_dt);
+        diffuse_v(grid, state.v, dv_dt, 1.0 / Re);
+        if ((frame++ % 60) == 0) {
+            double dt = compute_cfl(grid, state.u, state.v, Re, CFL_target);
+            printf("CFL dt: %g\n", dt);
+        }
 
         glfwPollEvents();
 
