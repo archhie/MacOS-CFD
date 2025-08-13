@@ -4,7 +4,7 @@
 #include <cmath>
 
 // Smooth top-hat mask for jet inflow (0 outside, ~1 inside)
-static inline double jet_mask(const Grid &g, const BC &bc, double y) {
+static inline double jet_mask(const BC &bc, double y) {
     double delta = bc.jet_thickness;
     double y0 = bc.jet_center;
     double w = bc.jet_width;
@@ -14,7 +14,7 @@ static inline double jet_mask(const Grid &g, const BC &bc, double y) {
 }
 
 static inline double jet_velocity(const Grid &g, const BC &bc, double y) {
-    double base = bc.left.inflow_u * jet_mask(g, bc, y);
+    double base = bc.left.inflow_u * jet_mask(bc, y);
     const double pi = 3.14159265358979323846;
     double pert = bc.jet_eps * bc.left.inflow_u *
                   std::sin(2.0 * pi * bc.jet_k * (y / g.Ly) + bc.jet_phase);
@@ -178,7 +178,6 @@ void apply_bc_u(const Grid &g, Field2D<double> &u, const BC &bc) {
 
 void apply_bc_v(const Grid &g, Field2D<double> &v, const BC &bc) {
     int nx = g.nx;
-    int ny = g.ny;
     int ngx = g.ngx;
     int ngy = g.ngy;
 
@@ -199,7 +198,7 @@ void apply_bc_v(const Grid &g, Field2D<double> &v, const BC &bc) {
         }
         case BCType::Inflow: {
             double y = j * g.dy;
-            double val = bc.left.inflow_v * jet_mask(g, bc, y);
+            double val = bc.left.inflow_v * jet_mask(bc, y);
             v.at_raw(ngx, jj) = val;
             v.at_raw(ngx - 1, jj) = val;
             break;
